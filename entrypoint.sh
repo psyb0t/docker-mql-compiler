@@ -43,6 +43,9 @@ readonly MT5_INSTALLER_URL="${MQL_COMPILER_MT5_URL:-https://download.mql5.com/cd
 readonly MT4_METAEDITOR="metaeditor.exe"
 readonly MT5_METAEDITOR="metaeditor64.exe"
 readonly SIGNER_PATTERN="MetaQuotes"
+readonly SIGNATURE_ATTEMPTS=3
+# osslsigncode's words when it could not get a CRL (its own typo included).
+readonly CRL_FETCH_FAILURE="Fai(le)?d to (decode|download|get|fetch) CRL"
 readonly CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 readonly XVFB_DISPLAY="${DISPLAY:-:99}"
 readonly DOWNLOAD_RETRIES=3
@@ -126,17 +129,47 @@ find_metaeditor() {
     find "$DRIVE_C" -path "$DRIVE_C/windows" -prune -o -iname "$(metaeditor_name "$1")" -print -quit 2>/dev/null
 }
 
+# The full check, revocation lists included. Prints osslsigncode's report.
+signature_report() {
+    osslsigncode verify -CAfile "$CA_BUNDLE" "$@" 2>&1
+}
+
 verify_installer() {
-    local file="$1" report
-    if ! report="$(osslsigncode verify -CAfile "$CA_BUNDLE" -in "$file" 2>&1)"; then
-        log ERROR "installer signature check failed file=$(basename "$file") report=$report"
+    local file="$1" name report attempt
+    name="$(basename "$file")"
+    for ((attempt = 1; attempt <= SIGNATURE_ATTEMPTS; attempt++)); do
+        if report="$(signature_report -in "$file")"; then
+            require_signer "$name" "$report"
+            return
+        fi
+        # A revocation list the CA's server failed to deliver is worth another
+        # try; anything else (a bad digest, an untrusted chain, a revoked
+        # certificate) fails at once.
+        grep -qE "$CRL_FETCH_FAILURE" <<<"$report" || break
+        log WARN "revocation list fetch failed, retrying file=$name attempt=$attempt"
+        sleep "$DOWNLOAD_RETRY_DELAY_SECONDS"
+    done
+    if ! grep -qE "$CRL_FETCH_FAILURE" <<<"$report"; then
+        log ERROR "installer signature check failed file=$name report=$report"
         return 1
     fi
+    # The CA's revocation server stayed unreachable. The signature, digest and
+    # chain still have to verify; only the online revocation lookup is dropped.
+    if ! report="$(signature_report -ignore-crl -in "$file")"; then
+        log ERROR "installer signature check failed file=$name report=$report"
+        return 1
+    fi
+    log WARN "installer verified without the revocation check file=$name reason=crl_unreachable"
+    require_signer "$name" "$report"
+}
+
+require_signer() {
+    local name="$1" report="$2"
     if ! grep -qi "Subject:.*$SIGNER_PATTERN" <<<"$report"; then
-        log ERROR "installer is validly signed but not by $SIGNER_PATTERN file=$(basename "$file")"
+        log ERROR "installer is validly signed but not by $SIGNER_PATTERN file=$name"
         return 1
     fi
-    log INFO "installer signature ok signer=$SIGNER_PATTERN file=$(basename "$file")"
+    log INFO "installer signature ok signer=$SIGNER_PATTERN file=$name"
 }
 
 install_platform() {

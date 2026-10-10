@@ -2,6 +2,10 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.1.1, 2026-10-10
+
+- The installer signature check survives a flaky revocation server. It needs the certificate authority's revocation list, and when that download failed (as it did on GitHub's runners for v0.1.0, so no image was published) the whole first run failed. The check now retries three times. If the list still can't be fetched, it verifies the signature, digest and certificate chain without the online revocation lookup and logs a warning with `reason=crl_unreachable`. A bad digest, an untrusted chain or a revoked certificate still fails at once.
+
 ## v0.1.0, 2026-10-10
 
 - First release. `psyb0t/mql-compiler` compiles `.mq4` and `.mq5` files with MetaEditor under Wine 10 on Debian trixie, writes the `.ex4` and `.ex5` next to the sources, prints errors and warnings with file, line and column, and exits `0` when everything compiled, `1` on compile errors and `2` on bad usage or a failed setup.
