@@ -2,20 +2,30 @@
 # mql-compiler: compile MQL4 (.mq4) and MQL5 (.mq5) sources with MetaEditor
 # under Wine.
 #
-#   mql-compiler [--setup] [--help] [PATH ...]
+#   mql-compiler [--setup] [--help] [FILE or FOLDER ...]
 #
-# PATHs are files or directories under the mounted /src, relative or absolute.
-# Without any, every .mq4 and .mq5 under /src is compiled. Each .ex4/.ex5 is
-# written next to its source, as MetaEditor does.
+# Every argument is a file to compile or a folder to search (recursively) for
+# .mq4 and .mq5 files; no argument means the current folder. Relative paths
+# start from the current folder. Each file goes to the compiler for its
+# extension (.mq4 to MT4's MetaEditor, .mq5 to MT5's), one after another in
+# path order, and its .ex4/.ex5 lands next to it.
 #
-# `#include <...>` resolves against the nearest enclosing folder named MQL4 or
-# MQL5 (the layout of a terminal's data folder), so mounting a whole MQL5
-# folder compiles its Experts, Indicators and Scripts against its own Include.
+# Includes: MetaEditor reads `#include <...>` from exactly one folder,
+# <root>/Include. For each compile the root is a merged folder: the
+# terminal's standard library (Trade/Trade.mqh, stdlib.mqh, ...) with the
+# Include folder of the nearest enclosing MQL4/MQL5 folder laid over it, so
+# both are found and a file of yours replaces the standard one of the same
+# name. The merged root also links that folder's other subfolders, so
+# #resource paths such as "\\Indicators\\X.ex5" resolve. A source outside any
+# MQL4/MQL5 folder gets the standard library alone. `#include "..."` resolves
+# next to the source as usual.
 #
 # The MetaQuotes toolchain is not in the image. The first run downloads the
-# RoboForex MT4 and MT5 installers, checks their MetaQuotes code signature,
-# and installs them into /cache/uid-<UID>. Keep /cache on a volume and later
-# runs skip straight to compiling.
+# RoboForex MT4 and MT5 installers (or MQL_COMPILER_MT4_URL / _MT5_URL),
+# checks their MetaQuotes code signature, installs them, and starts each
+# terminal once so it unpacks its standard library. All of it lands in
+# /cache/uid-<UID>; keep /cache on a volume and later runs skip straight to
+# compiling.
 #
 # Exit status: 0 every file compiled, 1 at least one has compile errors,
 # 2 bad usage or a toolchain that could not be set up.
@@ -25,11 +35,10 @@
 set -euo pipefail
 trap 'printf "{\"level\":\"ERROR\",\"file\":\"%s\",\"line\":%d,\"msg\":\"command failed exit=%d\"}\n" "${BASH_SOURCE[0]##*/}" "$LINENO" "$?" >&2' ERR
 
-readonly SRC_ROOT="/src"
-# Each UID gets its own toolchain folder, so one shared volume serves every
-# user and Wine always finds a prefix it owns.
 CALLER_UID="$(id -u)"
 readonly CALLER_UID
+# Each UID gets its own toolchain folder, so one shared volume serves every
+# user and Wine always finds a prefix it owns.
 readonly CACHE_ROOT="/cache/uid-$CALLER_UID"
 readonly INSTALLER_DIR="$CACHE_ROOT/installers"
 readonly LOG_DIR="$CACHE_ROOT/logs"
@@ -42,6 +51,16 @@ readonly MT4_INSTALLER_URL="${MQL_COMPILER_MT4_URL:-https://download.mql5.com/cd
 readonly MT5_INSTALLER_URL="${MQL_COMPILER_MT5_URL:-https://download.mql5.com/cdn/web/22607/mt5/roboforexltd5setup.exe}"
 readonly MT4_METAEDITOR="metaeditor.exe"
 readonly MT5_METAEDITOR="metaeditor64.exe"
+readonly MT4_TERMINAL="terminal.exe"
+readonly MT5_TERMINAL="terminal64.exe"
+readonly MT4_FOLDER="MQL4"
+readonly MT5_FOLDER="MQL5"
+# A header each terminal unpacks into its standard library on first start.
+readonly MT4_STDLIB_MARKER="Include/stdlib.mqh"
+readonly MT5_STDLIB_MARKER="Include/Trade/Trade.mqh"
+readonly INCLUDE_FOLDER="include"
+readonly STDLIB_UNPACK_TIMEOUT_SECONDS=120
+readonly POLL_SECONDS=2
 readonly SIGNER_PATTERN="MetaQuotes"
 readonly SIGNATURE_ATTEMPTS=3
 # osslsigncode's words when it could not get a CRL (its own typo included).
@@ -74,14 +93,24 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: mql-compiler [--setup] [PATH ...]
+Usage: mql-compiler [FILE or FOLDER ...]
 
-Compiles .mq4 and .mq5 files with MetaEditor. PATHs are files or folders
-under /src; without any, everything under /src is compiled. Outputs land next
-to their sources. #include <...> resolves against the nearest MQL4/ or MQL5/
-folder above the source.
+  (no arguments)  compile every .mq4 and .mq5 under the current folder
+  a file          compile that file (expert, indicator, script or library)
+  a folder        compile every .mq4 and .mq5 inside it, recursively
 
-  --setup   only download and install the MetaQuotes toolchain into /cache
+Paths may be relative or absolute. .mq4 files go to MT4's MetaEditor and
+.mq5 files to MT5's, one after another in path order. Each .ex4/.ex5 lands
+next to its source.
+
+#include <...> finds both the MetaQuotes standard library and the Include
+folder of the nearest MQL4/ or MQL5/ folder above the source; a file of yours
+replaces the standard one with the same name. #resource "\\Files\\..." starts
+at that MQL4/MQL5 folder. #include "..." resolves next to the source. A
+source outside any MQL4/MQL5 folder gets the standard library only.
+
+  --setup   only download and install the MetaQuotes toolchain and unpack
+            its standard library
   --help    show this help
 
 Exit status: 0 all compiled, 1 compile errors, 2 usage or setup failure.
@@ -91,10 +120,11 @@ EOF
 # ---------------------------------------------------------------- display ---
 
 XVFB_PID=""
+STAGING_DIR=""
 
 start_display() {
-    # Xvfb's and wineserver's own chatter is noise in a compile log; failures
-    # surface when MetaEditor cannot start.
+    # Xvfb's own chatter is noise in a compile log; failures surface when
+    # MetaEditor cannot start.
     Xvfb "$XVFB_DISPLAY" -screen 0 1024x768x24 -nolisten tcp >/dev/null 2>&1 &
     XVFB_PID=$!
 }
@@ -105,12 +135,15 @@ keep_wineserver() {
     wineserver -p >/dev/null 2>&1
 }
 
-stop_display() {
+cleanup() {
     # Best effort on the way out: a wineserver or Xvfb that is already gone
     # must not turn a finished run into a failure.
     wineserver -k >/dev/null 2>&1 || true
     if [[ -n "$XVFB_PID" ]]; then
         kill "$XVFB_PID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$STAGING_DIR" ]]; then
+        rm -rf "$STAGING_DIR"
     fi
 }
 
@@ -123,10 +156,38 @@ metaeditor_name() {
     esac
 }
 
+terminal_name() {
+    case "$1" in
+        mt4) printf '%s\n' "$MT4_TERMINAL" ;;
+        mt5) printf '%s\n' "$MT5_TERMINAL" ;;
+    esac
+}
+
+mql_folder() {
+    case "$1" in
+        mt4) printf '%s\n' "$MT4_FOLDER" ;;
+        mt5) printf '%s\n' "$MT5_FOLDER" ;;
+    esac
+}
+
+stdlib_marker() {
+    case "$1" in
+        mt4) printf '%s\n' "$MT4_STDLIB_MARKER" ;;
+        mt5) printf '%s\n' "$MT5_STDLIB_MARKER" ;;
+    esac
+}
+
 find_metaeditor() {
     [[ -d "$DRIVE_C" ]] || return 0
     # Unreadable corners of a Wine prefix are irrelevant to the search.
     find "$DRIVE_C" -path "$DRIVE_C/windows" -prune -o -iname "$(metaeditor_name "$1")" -print -quit 2>/dev/null
+}
+
+# The terminal's own MQL4/MQL5 folder, which holds its standard library.
+stdlib_root() {
+    local editor
+    editor="$(find_metaeditor "$1")"
+    printf '%s/%s\n' "$(dirname "$editor")" "$(mql_folder "$1")"
 }
 
 # The full check, revocation lists included. Prints osslsigncode's report.
@@ -194,6 +255,33 @@ install_platform() {
     log INFO "platform ready platform=$platform"
 }
 
+# The installer leaves the standard library packed inside the terminal; the
+# terminal unpacks it into its MQL4/MQL5 folder the first time it starts.
+# Start it once in portable mode, wait for the headers, then stop it.
+unpack_stdlib() {
+    local platform="$1" root marker terminal_dir waited=0
+    root="$(stdlib_root "$platform")"
+    marker="$root/$(stdlib_marker "$platform")"
+    [[ -f "$marker" ]] && return 0
+    terminal_dir="$(dirname "$root")"
+    log INFO "unpacking the standard library platform=$platform (starts the terminal once)"
+    # The terminal never exits on its own; it is stopped below once the
+    # headers are there, and its output is a GUI log nobody reads.
+    (cd "$terminal_dir" && wine "$(terminal_name "$platform")" /portable >/dev/null 2>&1 &)
+    while [[ ! -f "$marker" ]] && ((waited < STDLIB_UNPACK_TIMEOUT_SECONDS)); do
+        sleep "$POLL_SECONDS"
+        waited=$((waited + POLL_SECONDS))
+    done
+    # Give the terminal a moment to finish writing the rest of the tree.
+    sleep "$POLL_SECONDS"
+    wineserver -k >/dev/null 2>&1 || true # stops the terminal; nothing else runs in this prefix yet
+    if [[ ! -f "$marker" ]]; then
+        log ERROR "the terminal did not unpack its standard library platform=$platform waited=${waited}s"
+        return 1
+    fi
+    log INFO "standard library ready platform=$platform path=$root"
+}
+
 ensure_toolchain() {
     mkdir -p "$HOME" "$INSTALLER_DIR"
     if [[ -e "$WINEPREFIX" && ! -O "$WINEPREFIX" ]]; then
@@ -211,57 +299,113 @@ ensure_toolchain() {
     fi
     [[ -n "$(find_metaeditor mt5)" ]] || install_platform mt5 "$MT5_INSTALLER_URL" || die "MT5 setup failed"
     [[ -n "$(find_metaeditor mt4)" ]] || install_platform mt4 "$MT4_INSTALLER_URL" || die "MT4 setup failed"
+    unpack_stdlib mt5 || die "MT5 standard library setup failed"
+    unpack_stdlib mt4 || die "MT4 standard library setup failed"
     flock -u 9
 }
 
-# ---------------------------------------------------------------- compile ---
+# ---------------------------------------------------------------- include ---
 
-relative() {
-    printf '%s\n' "${1#"$SRC_ROOT"/}"
-}
-
-# The nearest enclosing MQL4/ or MQL5/ folder (matched case-insensitively, as
-# Windows would), which MetaEditor's /inc: takes as the root for <...>.
-include_root() {
+# The nearest enclosing folder named MQL4 or MQL5 (matched case-insensitively,
+# as Windows would), or nothing.
+user_mql_root() {
     local dir wanted="$2"
     dir="$(dirname "$1")"
-    while [[ "$dir" == "$SRC_ROOT"* ]]; do
+    while [[ "$dir" != "/" ]]; do
         if [[ "$(basename "$dir" | tr '[:lower:]' '[:upper:]')" == "$wanted" ]]; then
             printf '%s\n' "$dir"
             return 0
         fi
-        [[ "$dir" == "$SRC_ROOT" ]] && return 0
         dir="$(dirname "$dir")"
     done
 }
 
-# MetaEditor writes its log as UTF-16 with Windows paths; this prints plain
-# UTF-8 lines with those paths made relative to /src again.
+# The /inc root for one compile, left in MERGED_ROOT. MetaEditor reads <...>
+# includes from exactly one <root>/Include, so this builds a folder holding
+# both: links to the terminal's standard Include with links to the user's
+# Include laid over them (the user's file wins on a clash), plus links to the
+# user's other subfolders for #resource paths. It lives in the staging folder
+# because MetaEditor's /inc cannot take a path with spaces, and the terminal
+# sits under "Program Files". Built once per platform and user folder per run.
+declare -A MERGED_ROOTS=()
+MERGED_ROOT=""
+
+build_merged_root() {
+    local platform="$1" user_root="$2" key entry name
+    key="$platform:$user_root"
+    if [[ -n "${MERGED_ROOTS[$key]:-}" ]]; then
+        MERGED_ROOT="${MERGED_ROOTS[$key]}"
+        return
+    fi
+    MERGED_ROOT="$STAGING_DIR/${#MERGED_ROOTS[@]}/$(mql_folder "$platform")"
+    mkdir -p "$MERGED_ROOT"
+    cp -rs "$(stdlib_root "$platform")/Include" "$MERGED_ROOT/Include"
+    MERGED_ROOTS[$key]="$MERGED_ROOT"
+    [[ -n "$user_root" ]] || return 0
+    for entry in "$user_root"/*; do
+        [[ -e "$entry" ]] || continue
+        name="$(basename "$entry")"
+        if [[ "${name,,}" == "$INCLUDE_FOLDER" && -d "$entry" ]]; then
+            cp -rs --remove-destination "$entry/." "$MERGED_ROOT/Include/"
+            continue
+        fi
+        ln -s "$entry" "$MERGED_ROOT/$name"
+    done
+}
+
+# ---------------------------------------------------------------- compile ---
+
+# A path as the user should read it: relative to the current folder when it
+# is inside it, absolute otherwise.
+shown() {
+    if [[ "$1" == "$PWD/"* ]]; then
+        printf '%s\n' "${1#"$PWD"/}"
+        return
+    fi
+    printf '%s\n' "$1"
+}
+
+sed_escape() {
+    printf '%s' "$1" | sed 's/[][\.*^$|/]/\\&/g'
+}
+
+# MetaEditor writes its log as UTF-16 with Windows paths. This prints plain
+# UTF-8 lines with those paths turned back into real ones: Z:\ is /, the
+# merged include root reads as $3 (the user's MQL4/MQL5 folder, or the
+# terminal's for a loose file), and the current folder is dropped from the
+# front.
 read_log() {
-    local windows_root
-    windows_root="$(winepath -w "$SRC_ROOT")"
-    iconv -f UTF-16 -t UTF-8 "$1" | tr -d '\r' | sed -e "s|${windows_root//\\/\\\\}\\\\||g" -e 's|\\|/|g'
+    local log_file="$1" merged="$2" shown_root="$3"
+    iconv -f UTF-16 -t UTF-8 "$log_file" | tr -d '\r' | sed \
+        -e 's|\\|/|g' \
+        -e 's|[Zz]:/|/|g' \
+        -e "s|$(sed_escape "$merged")|$(sed_escape "$shown_root")|g" \
+        -e "s|$(sed_escape "$PWD/")||g"
 }
 
 compile_one() {
-    local source="$1" platform root output editor log_file result errors warnings
+    local source="$1" platform user_root shown_root output editor log_file result errors warnings
     case "${source,,}" in
-        *.mq4) platform=mt4 root="$(include_root "$source" MQL4)" output="${source%.*}.ex4" ;;
-        *.mq5) platform=mt5 root="$(include_root "$source" MQL5)" output="${source%.*}.ex5" ;;
+        *.mq4) platform=mt4 output="${source%.*}.ex4" ;;
+        *.mq5) platform=mt5 output="${source%.*}.ex5" ;;
     esac
+    user_root="$(user_mql_root "$source" "$(mql_folder "$platform")")"
+    build_merged_root "$platform" "$user_root"
+    shown_root="${user_root:-$(stdlib_root "$platform")}"
     editor="$(find_metaeditor "$platform")"
     log_file="$(mktemp --suffix=.log)"
 
-    local args=("/compile:$(winepath -w "$source")" "/log:$(winepath -w "$log_file")")
-    [[ -n "$root" ]] && args+=("/inc:$(winepath -w "$root")")
     # MetaEditor's exit code is backwards (1 usually means success); the log's
     # Result line is the verdict, and its stderr is Wine noise.
-    wine "$editor" "${args[@]}" >/dev/null 2>&1 || true
+    wine "$editor" \
+        "/compile:$(winepath -w "$source")" \
+        "/log:$(winepath -w "$log_file")" \
+        "/inc:$(winepath -w "$MERGED_ROOT")" >/dev/null 2>&1 || true
 
-    result="$(read_log "$log_file" | grep -E '^Result: ' | tail -n 1)" || result=""
+    result="$(read_log "$log_file" "$MERGED_ROOT" "$shown_root" | grep -E '^Result: ' | tail -n 1)" || result=""
     if [[ -z "$result" ]]; then
-        printf 'FAIL %s: MetaEditor wrote no result\n' "$(relative "$source")"
-        read_log "$log_file" | sed 's/^/     /'
+        printf 'FAIL %s: MetaEditor wrote no result\n' "$(shown "$source")"
+        read_log "$log_file" "$MERGED_ROOT" "$shown_root" | sed 's/^/     /'
         rm -f "$log_file"
         return 1
     fi
@@ -269,12 +413,12 @@ compile_one() {
     warnings="$(sed -nE 's/.* ([0-9]+) warning.*/\1/p' <<<"$result")"
 
     if [[ "$errors" == "0" ]]; then
-        printf 'OK   %s -> %s (%s warnings)\n' "$(relative "$source")" "$(relative "$output")" "${warnings:-0}"
+        printf 'OK   %s -> %s (%s warnings)\n' "$(shown "$source")" "$(shown "$output")" "${warnings:-0}"
     else
-        printf 'FAIL %s (%s errors, %s warnings)\n' "$(relative "$source")" "$errors" "${warnings:-0}"
+        printf 'FAIL %s (%s errors, %s warnings)\n' "$(shown "$source")" "$errors" "${warnings:-0}"
     fi
     # A clean file has no error or warning lines, which grep reports as 1.
-    read_log "$log_file" | grep -E ' : (error|warning) ' | sed 's/^/     /' || true
+    read_log "$log_file" "$MERGED_ROOT" "$shown_root" | grep -E ' : (error|warning) ' | sed 's/^/     /' || true
     rm -f "$log_file"
     [[ "$errors" == "0" ]]
 }
@@ -282,15 +426,16 @@ compile_one() {
 collect_sources() {
     local target
     for target in "$@"; do
-        [[ "$target" == /* ]] || target="$SRC_ROOT/$target"
+        [[ "$target" == /* ]] || target="$PWD/$target"
+        target="$(realpath -ms "$target")"
         if [[ -d "$target" ]]; then
             find "$target" -type f \( -iname '*.mq4' -o -iname '*.mq5' \) -print | sort
             continue
         fi
-        [[ -f "$target" ]] || die "no such file or folder: $(relative "$target")"
+        [[ -f "$target" ]] || die "no such file or folder: $(shown "$target")"
         case "${target,,}" in
             *.mq4 | *.mq5) printf '%s\n' "$target" ;;
-            *) die "not an .mq4 or .mq5 file: $(relative "$target")" ;;
+            *) die "not an .mq4 or .mq5 file: $(shown "$target")" ;;
         esac
     done
 }
@@ -311,21 +456,23 @@ main() {
         esac
         shift
     done
-    ((${#targets[@]})) || targets=("$SRC_ROOT")
+    ((${#targets[@]})) || targets=(".")
 
     mkdir -p "$LOG_DIR"
     exec > >(tee "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
 
     local sources=() listing
     if [[ "$setup_only" == false ]]; then
-        # A command substitution, not <(...), so a bad PATH ends the run here.
-        listing="$(collect_sources "${targets[@]}")"
-        [[ -n "$listing" ]] || die "no .mq4 or .mq5 files found under $(relative "${targets[0]}")"
+        # A command substitution, not <(...), so a bad path ends the run here.
+        # A file named twice (directly and through its folder) compiles once.
+        listing="$(collect_sources "${targets[@]}" | awk '!seen[$0]++')"
+        [[ -n "$listing" ]] || die "no .mq4 or .mq5 files found in: ${targets[*]}"
         mapfile -t sources <<<"$listing"
     fi
 
+    STAGING_DIR="$(mktemp -d /tmp/mql-compiler.XXXXXX)"
     start_display
-    trap stop_display EXIT
+    trap cleanup EXIT
     ensure_toolchain
     if [[ "$setup_only" == true ]]; then
         log INFO "toolchain ready path=$CACHE_ROOT"

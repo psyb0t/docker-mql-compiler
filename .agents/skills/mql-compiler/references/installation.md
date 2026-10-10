@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/i
 | `--rolling` | Pin `psyb0t/mql-compiler:latest` instead of the newest release tag |
 | `--uninstall` | Remove the command; the toolchain volume stays |
 
-The installer pins the newest GitHub release (for example `psyb0t/mql-compiler:v0.1.1`), pulls it, and writes the pin into the command file. There is no config folder. It refuses to overwrite a file at the target path that it did not install. A per-user install warns when `~/.local/bin` is not on `PATH` and prints the line to add to `~/.bashrc` or `~/.zshrc`.
+The installer pins the newest GitHub release (for example `psyb0t/mql-compiler:v0.2.0`), pulls it, and writes the pin into the command file. There is no config folder. It refuses to overwrite a file at the target path that it did not install. A per-user install warns when `~/.local/bin` is not on `PATH` and prints the line to add to `~/.bashrc` or `~/.zshrc`.
 
 ## Upgrade
 
@@ -31,7 +31,7 @@ Run the same install command again. It pins the newest release and removes the i
 
 ## First run
 
-The first compile downloads the MT4 and MT5 installers, checks their MetaQuotes signatures, and installs both into the `mql-compiler-cache` Docker volume. It takes about a minute and a half and about 2 GB of disk. `mql-compiler --setup` does only this, which is handy before a timed job. Later runs reuse the volume and take seconds.
+The first compile downloads the MT4 and MT5 installers, checks their MetaQuotes signatures, and installs both into the `mql-compiler-cache` Docker volume. The installers leave the standard library packed, so setup then starts each terminal once, headless, until it has unpacked its `MQL4`/`MQL5` folder, and stops it. All of it takes about a minute and a half and about 2 GB of disk. A cache from v0.1.x gets the standard library on its next run, without a reinstall. `mql-compiler --setup` does only this, which is handy before a timed job. Later runs reuse the volume and take seconds.
 
 To use another broker's installers, set `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` before the first run. For an existing cache, remove the volume first.
 
@@ -56,4 +56,6 @@ docker volume ls | grep mql-compiler-cache   # toolchain cached (after the first
 
 - **`cannot talk to Docker`**: the daemon is down, or the user is not in the `docker` group.
 - **`MT5 setup failed` / `MT4 setup failed`**: the installer download or its signature check failed; stderr has the reason. Retry; a custom installer URL must point at a MetaQuotes-signed setup file.
-- **`no such file or folder`**: the path is outside the current directory, which is the only folder the container sees.
+- **`no such file or folder`**: the path does not exist (relative paths start at the current folder).
+- **`the terminal did not unpack its standard library`**: the terminal started but never wrote its headers within two minutes. Run `mql-compiler --setup` again; if it keeps failing, remove the volume to reinstall.
+- **`file '...' not found` for a custom header**: the source is not under the `MQL4`/`MQL5` folder whose `Include` holds that header.
