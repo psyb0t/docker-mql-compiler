@@ -232,7 +232,7 @@ Mount your sources at `/src` (the image's working folder, so relative paths star
 
 ## Agent integrations
 
-[`.agents/skills/mql-compiler`](.agents/skills/mql-compiler/SKILL.md) teaches a coding agent (Claude Code, Codex, OpenClaw) to install the command, compile, and read the JSON results without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
+[`.agents/skills/mql-compiler`](.agents/skills/mql-compiler/SKILL.md) teaches a coding agent (Claude Code, Codex, OpenClaw, [peen](https://github.com/psyb0t/peen)) to install the command, compile, and read the JSON results without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
 
 ## Development
 

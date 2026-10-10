@@ -2,6 +2,10 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.3.1, 2026-10-10
+
+- Documentation only. The README's agent integrations section lists [peen](https://github.com/psyb0t/peen) among the agents the skill works with.
+
 ## v0.3.0, 2026-10-10
 
 - Breaking: results on stdout are JSON Lines by default. Each source gets a `file` record with its status, output path, error and warning counts, and every message as `{severity, file, line, column, code, text}`. A `summary` record follows each pass, and a run that cannot start prints an `error` record instead. The old `OK`/`FAIL` lines are behind `--text`. See "What comes out" in the README.
