@@ -2,6 +2,11 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.4.0, 2026-10-10
+
+- `--mt4-terminal DIR` and `--mt5-terminal DIR` compile with the MetaEditor and standard library of a portable terminal you already have, instead of the cached install. The folder is mounted read-only and nothing is written into it, except the `.ex4`/`.ex5` of a source compiled from inside its own `MQL4`/`MQL5` folder. The cached toolchain stays as it was. A folder without MetaEditor, or whose terminal has never been started and so has not unpacked its standard library, is exit `2`. `--version` with the option reports that terminal's build.
+- A platform given its own terminal is never downloaded or installed, and a compile now installs only the platforms its sources need. Before, the first run always installed both MT4 and MT5; now a first run of only `.mq5` files installs MT5 alone, and MT4 follows the first time a `.mq4` is compiled. `--setup`, `--update` and `--watch` still install both.
+
 ## v0.3.2, 2026-10-10
 
 - Tests cover every feature. New end-to-end cases: a first run whose installer cannot be downloaded or has no signature, `--update` failing and putting the old toolchain back, `--setup`, a cache folder owned by another UID, the installer URL reaching the image, symlinks, lowercase `mql5` folders, the `-Idir` form, quotes in paths, an MT4 image `#resource`, `--watch` reacting to an `-I` folder and letting other runs in between passes, the GitHub Action's annotations, job summary and outputs, and `install.sh` (dev install, refusing foreign files, uninstall removing the pinned image).

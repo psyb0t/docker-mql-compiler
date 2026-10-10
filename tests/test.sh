@@ -227,6 +227,98 @@ test_extra_includes() {
     expect_status "a missing -I folder" "$EXIT_USAGE"
 }
 
+# A portable terminal for --mtN-terminal tests: a copy of the cached install's
+# folder for that platform (MetaEditor plus its unpacked MQL4/MQL5), at $2.
+# Its name has a space, as real terminal folders do.
+portable_terminal() {
+    local editor="$1" target="$2" source
+    source="$(find "$TEST_CACHE/uid-$(id -u)/wine/drive_c" -iname "$editor" -print -quit)"
+    [[ -n "$source" ]] || {
+        log "no $editor in the test cache; run the suite once to install it"
+        return 1
+    }
+    cp -r "$(dirname "$source")" "$target"
+}
+
+test_mounted_terminals() {
+    log "--mt4-terminal and --mt5-terminal"
+    fresh_workdir
+    local mt5_term="$WORK_ROOT/terminals/MT5 portable" mt4_term="$WORK_ROOT/terminals/MT4 portable"
+    local stamp="$WORK_ROOT/terminals/.stamp" empty_cache="$REPO_ROOT/.testing/empty-cache" changed
+    mkdir -p "$WORK_ROOT/terminals"
+    portable_terminal metaeditor64.exe "$mt5_term"
+    portable_terminal metaeditor.exe "$mt4_term"
+    # Headers only the copied terminals have: a source using them compiles
+    # with that terminal and fails with the cached one.
+    mkdir -p "$mt5_term/MQL5/Include/Mounted" "$mt4_term/MQL4/Include/Mounted"
+    printf '%s\n' 'string MountedTerminal() { return "mounted"; }' >"$mt5_term/MQL5/Include/Mounted/Marker.mqh"
+    printf '%s\n' 'string MountedTerminal() { return "mounted"; }' >"$mt4_term/MQL4/Include/Mounted/Marker.mqh"
+    printf '%s\n' '#include <Mounted/Marker.mqh>' 'void OnStart() { Print(MountedTerminal()); }' >"$WORK_ROOT/MQL5/Scripts/UsesTerminal.mq5"
+    printf '%s\n' '#include <Mounted/Marker.mqh>' 'void OnStart() { Print(MountedTerminal()); }' >"$WORK_ROOT/MQL4/Scripts/UsesTerminal.mq4"
+    touch "$stamp"
+
+    wrapped "$WORK_ROOT" --mt5-terminal "$mt5_term" "--mt4-terminal=$mt4_term" MQL5/Scripts/UsesTerminal.mq5 MQL4/Scripts/UsesTerminal.mq4
+    expect_status "compiling with mounted terminals" "$EXIT_OK"
+    expect_record "--mt5-terminal compiles with that terminal's standard library" "$(file_is MQL5/Scripts/UsesTerminal.mq5 ok)"
+    expect_record "--mt4-terminal compiles with that terminal's standard library" "$(file_is MQL4/Scripts/UsesTerminal.mq4 ok)"
+    expect_log "the log names the mounted terminal" "using a mounted terminal platform=mt5 path=$mt5_term"
+    changed="$(find "$WORK_ROOT/terminals" -newer "$stamp" -not -path "$stamp" | head -n 1)"
+    if [[ -z "$changed" ]]; then
+        pass "nothing is written into a mounted terminal"
+    else
+        fail "nothing is written into a mounted terminal" "changed: $changed"
+    fi
+
+    wrapped "$WORK_ROOT" MQL5/Scripts/UsesTerminal.mq5
+    expect_status "the same source without --mt5-terminal" "$EXIT_COMPILE_ERRORS"
+    expect_record "without the option the cached toolchain is used, unchanged" "$(file_is MQL5/Scripts/UsesTerminal.mq5 failed)"
+
+    # A source inside the terminal's own MQL5 folder: the terminal is mounted
+    # read-only, its MQL5 folder read-write on top, so the .ex5 lands.
+    mkdir -p "$mt5_term/MQL5/Scripts"
+    cp "$WORK_ROOT/MQL5/Scripts/UsesTerminal.mq5" "$mt5_term/MQL5/Scripts/"
+    wrapped "$WORK_ROOT" --mt5-terminal "$mt5_term" "$mt5_term/MQL5/Scripts/UsesTerminal.mq5"
+    expect_status "a source inside the mounted terminal" "$EXIT_OK"
+    if [[ -s "$mt5_term/MQL5/Scripts/UsesTerminal.ex5" ]]; then
+        pass "a source inside a mounted terminal gets its .ex5"
+    else
+        fail "a source inside a mounted terminal gets its .ex5" "no UsesTerminal.ex5"
+    fi
+
+    compile --version --mt5-terminal "/src/terminals/MT5 portable"
+    expect_status "--version with --mt5-terminal" "$EXIT_OK"
+    expect_record "--version reports the mounted MetaEditor's build" '.type == "version" and (.mt5_metaeditor | test("^[0-9]+(\\.[0-9]+)+$"))'
+
+    # A first run with a mounted terminal downloads nothing: both installer
+    # URLs point at a closed port, and the compile still succeeds.
+    rm -rf "$empty_cache"
+    mkdir -p "$empty_cache"
+    COMPILE_CACHE="$empty_cache"
+    MQL_COMPILER_MT5_URL="http://127.0.0.1:9/mt5.exe" MQL_COMPILER_MT4_URL="http://127.0.0.1:9/mt4.exe" \
+        wrapped "$WORK_ROOT" --mt5-terminal "$mt5_term" MQL5/Scripts/UsesTerminal.mq5
+    COMPILE_CACHE="$TEST_CACHE"
+    expect_status "a first run with --mt5-terminal and no reachable installer" "$EXIT_OK"
+    if [[ -z "$(find "$empty_cache" -path '*/installers/*' -print -quit)" ]]; then
+        pass "a first run with a mounted terminal downloads no installer"
+    else
+        fail "a first run with a mounted terminal downloads no installer" "$(find "$empty_cache" -path '*/installers/*')"
+    fi
+    rm -rf "$empty_cache"
+
+    compile --mt5-terminal does/not/exist MQL5/Experts/Hello.mq5
+    expect_status "a missing terminal folder" "$EXIT_USAGE"
+    expect_record "a missing terminal folder is an error record" '.type == "error" and (.message | startswith("no such terminal folder for --mt5-terminal"))'
+    compile --mt4-terminal MQL4 MQL4/Experts/Hello.mq4
+    expect_status "a terminal folder without MetaEditor" "$EXIT_USAGE"
+    expect_record "a folder without MetaEditor is named" '.type == "error" and (.message | startswith("no metaeditor.exe in the --mt4-terminal folder"))'
+    rm "$mt5_term/MQL5/Include/Trade/Trade.mqh"
+    compile --mt5-terminal "/src/terminals/MT5 portable" MQL5/Experts/Hello.mq5
+    expect_status "a terminal whose standard library is not unpacked" "$EXIT_USAGE"
+    expect_record "an unpacked standard library is required" '.type == "error" and (.message | test("start the terminal once"))'
+    wrapped "$WORK_ROOT" --mt5-terminal does/not/exist MQL5/Experts/Hello.mq5
+    expect_status "a missing terminal folder through the wrapper" "$EXIT_USAGE"
+}
+
 test_selection() {
     log "one file, one folder"
     fresh_workdir
@@ -830,6 +922,7 @@ main() {
     test_output_formats
     test_warnings
     test_extra_includes
+    test_mounted_terminals
     test_selection
     test_include_errors
     test_reported_paths

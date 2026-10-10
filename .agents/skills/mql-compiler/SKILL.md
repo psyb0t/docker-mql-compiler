@@ -33,7 +33,7 @@ mql-compiler -I /path/to/shared/lib MQL5 2>/dev/null    # a shared include folde
 mql-compiler --werror MQL5 2>/dev/null                  # warnings count as failures
 ```
 
-Options: `-I DIR` / `--include DIR` (extra include folder, repeatable), `--werror`, `--watch` (recompile on change until stopped; do not use it in an agent run, it never exits on its own), `--text` and `--format json|text|gnu` (output format; leave the JSON default), `--setup` (install only), `--update` (reinstall MT4/MT5 with the newest builds), `--version` (image version and MetaEditor builds), `-h`/`--help`.
+Options: `-I DIR` / `--include DIR` (extra include folder, repeatable), `--mt4-terminal DIR` / `--mt5-terminal DIR` (compile with that portable terminal's MetaEditor and standard library, mounted read-only; the terminal must have been started once so its standard library is unpacked), `--werror`, `--watch` (recompile on change until stopped; do not use it in an agent run, it never exits on its own), `--text` and `--format json|text|gnu` (output format; leave the JSON default), `--setup` (install only), `--update` (reinstall MT4/MT5 with the newest builds), `--version` (image version and MetaEditor builds), `-h`/`--help`.
 
 - Arguments are files or folders, relative or absolute, anywhere on the machine. No argument means the current folder. No `cd` is needed. A path that does not exist stops the run with exit `2` before anything compiles.
 - A folder is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order given; a file named twice compiles once, in its first position. `.mqh` and other files are skipped in folders and rejected (exit `2`) when named directly. A run that finds no sources exits `2`.
@@ -42,7 +42,7 @@ Options: `-I DIR` / `--include DIR` (extra include folder, repeatable), `--werro
 - The extension alone picks the compiler: `.mq4` goes to MT4's MetaEditor, `.mq5` to MT5's. The folder only decides the includes: a `.mq4` uses the nearest folder named `MQL4` (any case) above it, a `.mq5` the nearest `MQL5`. Experts, indicators, scripts and libraries all compile the same way.
 - Each `.ex4`/`.ex5` is written next to its source with the same base name, owned by the caller. The old one is deleted right before the file compiles, so after a run an `.ex4`/`.ex5` exists only if this run produced it. Still report success from the file's `"status": "ok"`.
 - The container sees only the mounted folders (each source's `MQL4`/`MQL5` folder, or a loose file's own folder). Includes, resources and symlinks that point outside them are missing files inside the container.
-- The first run downloads and installs MT4 and MT5 into the `mql-compiler-cache` Docker volume and unpacks their standard libraries, about a minute and a half. Allow for it in timeouts; later runs take seconds. `mql-compiler --setup` does only this.
+- The first run downloads and installs MT4 and MT5 into the `mql-compiler-cache` Docker volume and unpacks their standard libraries, about a minute and a half. A compile installs only the platforms its sources need, and never one given with `--mt4-terminal`/`--mt5-terminal`. Allow for it in timeouts; later runs take seconds. `mql-compiler --setup` does only this.
 
 ## How includes resolve
 

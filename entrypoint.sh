@@ -26,7 +26,10 @@
 # checks their MetaQuotes code signature, installs them, and starts each
 # terminal once so it unpacks its standard library. All of it lands in
 # /cache/uid-<UID>; keep /cache on a volume and later runs skip straight to
-# compiling.
+# compiling. A compile installs only the platforms its sources need, and
+# --mt4-terminal / --mt5-terminal hand a platform a portable terminal folder
+# instead (its MetaEditor and standard library), which is then never
+# downloaded.
 #
 # Output: by default one JSON object per line on stdout (a "file" record per
 # source, then a "summary"; an "error" record for a usage or setup failure).
@@ -103,6 +106,11 @@ exec 7>&1
 OUTPUT_FORMAT="$FORMAT_JSON"
 WERROR=false
 EXTRA_INCLUDES=()
+# Portable terminal folders from --mt4-terminal / --mt5-terminal. A platform
+# with one compiles with that folder's MetaEditor and standard library and is
+# never downloaded or installed into the cache.
+TERMINAL_MT4=""
+TERMINAL_MT5=""
 
 log() {
     local level="$1"
@@ -136,6 +144,10 @@ Usage: mql-compiler [OPTIONS] [FILE or FOLDER ...]
 Options:
   -I, --include DIR  lay DIR over the standard Include folder, so
                      #include <X/y.mqh> also finds DIR/X/y.mqh (repeatable)
+  --mt4-terminal DIR compile .mq4 files with the MetaEditor and standard
+                     library of the portable MT4 terminal in DIR, instead
+                     of the cached install (which is then never installed)
+  --mt5-terminal DIR the same for .mq5 files and a portable MT5 terminal
   --werror           count a file with warnings as failed
   --watch            compile, then compile again whenever a .mq4, .mq5 or
                      .mqh under the given paths changes, until stopped
@@ -272,7 +284,22 @@ stdlib_marker() {
     esac
 }
 
+terminal_dir() {
+    case "$1" in
+        mt4) printf '%s\n' "$TERMINAL_MT4" ;;
+        mt5) printf '%s\n' "$TERMINAL_MT5" ;;
+    esac
+}
+
+# The platform's MetaEditor: the one in its --mtN-terminal folder when given,
+# else the cached install's. Nothing when neither is there.
 find_metaeditor() {
+    local terminal
+    terminal="$(terminal_dir "$1")"
+    if [[ -n "$terminal" ]]; then
+        find "$terminal" -maxdepth 1 -type f -iname "$(metaeditor_name "$1")" -print -quit
+        return
+    fi
     [[ -d "$DRIVE_C" ]] || return 0
     # Unreadable corners of a Wine prefix are irrelevant to the search.
     find "$DRIVE_C" -path "$DRIVE_C/windows" -prune -o -iname "$(metaeditor_name "$1")" -print -quit 2>/dev/null
@@ -280,7 +307,14 @@ find_metaeditor() {
 
 # The terminal's own MQL4/MQL5 folder, which holds its standard library.
 stdlib_root() {
-    local editor
+    local editor terminal
+    terminal="$(terminal_dir "$1")"
+    if [[ -n "$terminal" ]]; then
+        # A mounted terminal's folder may be spelled mql5 or Mql4; Windows
+        # does not care, and terminal_folder already checked it is there.
+        find "$terminal" -maxdepth 1 -type d -iname "$(mql_folder "$1")" -print -quit
+        return
+    fi
     editor="$(find_metaeditor "$1")"
     printf '%s/%s\n' "$(dirname "$editor")" "$(mql_folder "$1")"
 }
@@ -415,10 +449,24 @@ unpack_stdlib() {
     log INFO "standard library ready platform=$platform path=$root"
 }
 
-# Installs whatever is missing. Returns non-zero instead of exiting, so
-# --update can put the previous toolchain back.
+installer_url() {
+    case "$1" in
+        mt4) printf '%s\n' "$MT4_INSTALLER_URL" ;;
+        mt5) printf '%s\n' "$MT5_INSTALLER_URL" ;;
+    esac
+}
+
+# Installs whatever is missing for the given platforms (mt5 and mt4 by
+# default). A platform with a --mtN-terminal folder is skipped: it brings its
+# own MetaEditor, and the cached install is neither created nor touched.
+# Returns non-zero instead of exiting, so --update can put the previous
+# toolchain back.
 install_toolchain() {
+    local platform platforms=("$@")
+    ((${#platforms[@]})) || platforms=(mt5 mt4)
     mkdir -p "$HOME" "$INSTALLER_DIR"
+    # Every MetaEditor runs under Wine, a mounted one too, so the prefix is
+    # always needed.
     if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
         log INFO "creating the Wine prefix path=$WINEPREFIX"
         # wineboot prints first-run noise about missing Mono/Gecko, which a
@@ -426,14 +474,45 @@ install_toolchain() {
         wineboot --init >/dev/null 2>&1
         wineserver -w
     fi
-    [[ -n "$(find_metaeditor mt5)" ]] || install_platform mt5 "$MT5_INSTALLER_URL" || return 1
-    [[ -n "$(find_metaeditor mt4)" ]] || install_platform mt4 "$MT4_INSTALLER_URL" || return 1
-    unpack_stdlib mt5 || return 1
-    unpack_stdlib mt4 || return 1
+    for platform in "${platforms[@]}"; do
+        if [[ -n "$(terminal_dir "$platform")" ]]; then
+            log INFO "using a mounted terminal platform=$platform path=$(terminal_dir "$platform") build=$(metaeditor_build "$platform")"
+            continue
+        fi
+        [[ -n "$(find_metaeditor "$platform")" ]] || install_platform "$platform" "$(installer_url "$platform")" || return 1
+        unpack_stdlib "$platform" || return 1
+    done
 }
 
 ensure_toolchain() {
-    install_toolchain || die "toolchain setup failed (see the log lines above)"
+    install_toolchain "$@" || die "toolchain setup failed (see the log lines above)"
+}
+
+# The platforms a list of sources needs, mt5 before mt4, one per line.
+needed_platforms() {
+    local listing="$1"
+    if grep -qi '\.mq5$' <<<"$listing"; then
+        printf 'mt5\n'
+    fi
+    if grep -qi '\.mq4$' <<<"$listing"; then
+        printf 'mt4\n'
+    fi
+}
+
+# Checks a --mtN-terminal folder and returns it as an absolute path: it must
+# hold that platform's MetaEditor and an MQL4/MQL5 folder whose standard
+# library the terminal has already unpacked (it does that on its first start).
+terminal_folder() {
+    local platform="$1" dir="$2" option="--$1-terminal" mql_dir
+    [[ "$dir" == /* ]] || dir="$PWD/$dir"
+    dir="$(realpath -ms "$dir")"
+    [[ -d "$dir" ]] || die "no such terminal folder for $option: $(shown "$dir")"
+    [[ -n "$(find "$dir" -maxdepth 1 -type f -iname "$(metaeditor_name "$platform")" -print -quit)" ]] ||
+        die "no $(metaeditor_name "$platform") in the $option folder: $(shown "$dir")"
+    mql_dir="$(find "$dir" -maxdepth 1 -type d -iname "$(mql_folder "$platform")" -print -quit)"
+    [[ -n "$mql_dir" && -f "$mql_dir/$(stdlib_marker "$platform")" ]] ||
+        die "no unpacked standard library ($(mql_folder "$platform")/$(stdlib_marker "$platform")) in the $option folder: $(shown "$dir"); start the terminal once so it unpacks it"
+    printf '%s\n' "$dir"
 }
 
 # A fresh install with the newest installers. The old prefix stays aside
@@ -795,8 +874,19 @@ include_folder() {
     printf '%s\n' "$dir"
 }
 
+# A command substitution, not an assignment inside terminal_folder, so its die
+# ends the run.
+set_terminal() {
+    local platform="$1" dir
+    dir="$(terminal_folder "$platform" "$2")"
+    case "$platform" in
+        mt4) TERMINAL_MT4="$dir" ;;
+        mt5) TERMINAL_MT5="$dir" ;;
+    esac
+}
+
 main() {
-    local mode="compile" targets=() watch=false
+    local mode="compile" targets=() watch=false listing platforms=()
     while (($#)); do
         case "$1" in
             -h | --help)
@@ -831,6 +921,15 @@ main() {
                 local value="${1#--include=}"
                 EXTRA_INCLUDES+=("$(include_folder "${value#-I}")")
                 ;;
+            --mt4-terminal | --mt5-terminal)
+                (($# >= 2)) || die "$1 needs a folder"
+                local option="$1"
+                shift
+                set_terminal "${option:2:3}" "$1"
+                ;;
+            --mt4-terminal=* | --mt5-terminal=*)
+                set_terminal "${1:2:3}" "${1#*=}"
+                ;;
             -*) die "unknown option: $1 (see --help)" ;;
             *) targets+=("$1") ;;
         esac
@@ -858,7 +957,13 @@ main() {
 
     if [[ "$mode" == "compile" ]]; then
         # Bad paths and empty folders fail now, before a first-run install.
-        [[ -n "$(collect_sources "${targets[@]}")" ]] || die "no .mq4 or .mq5 files found in: ${targets[*]}"
+        listing="$(collect_sources "${targets[@]}")"
+        [[ -n "$listing" ]] || die "no .mq4 or .mq5 files found in: ${targets[*]}"
+        # Only the platforms these sources need get installed, so a first
+        # run of .mq5 files with --mt5-terminal downloads nothing at all.
+        mapfile -t platforms < <(needed_platforms "$listing")
+        # --watch may meet the other extension later, so it gets both.
+        [[ "$watch" == false ]] || platforms=(mt5 mt4)
     fi
 
     STAGING_DIR="$(mktemp -d /tmp/mql-compiler.XXXXXX)"
@@ -877,7 +982,7 @@ main() {
             ;;
     esac
 
-    ensure_toolchain
+    ensure_toolchain "${platforms[@]}"
     keep_wineserver
     compile_pass "${targets[@]}"
     if [[ "$watch" == true ]]; then

@@ -35,6 +35,8 @@ The MT4 and MT5 toolchain in the cache does not change with the image: it stays 
 
 The first compile downloads the MT4 and MT5 installers, checks their signatures (valid digest, a trusted certificate chain, a signing certificate whose common name starts with `MetaQuotes`), and installs both into the `mql-compiler-cache` Docker volume. The installers leave the standard library packed, so setup then starts each terminal once, headless, until it has unpacked its `MQL4`/`MQL5` folder, and stops it. All of it takes about a minute and a half and about 2 GB of disk. `mql-compiler --setup` does only this, which is handy before a timed job. Later runs reuse the volume and take seconds.
 
+A compile installs only the platforms its sources need: a run of only `.mq5` files installs MT5 alone, and MT4 follows the first time a `.mq4` shows up. A platform given a portable terminal with `--mt4-terminal`/`--mt5-terminal` is never downloaded; the run uses that terminal's MetaEditor and standard library, mounted read-only, and only creates the Wine prefix.
+
 To use another broker's installers, set `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` together with a new `MQL_COMPILER_VOLUME` name, and keep that volume name for later runs. Removing `mql-compiler-cache` instead works too, but it deletes every user's toolchain on the machine.
 
 ## Uninstall

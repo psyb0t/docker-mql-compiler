@@ -14,7 +14,7 @@ The image downloads and runs Windows executables from the internet and compiles 
 
 - **SEC4:** The image runs as UID 1000 (`USER 1000:1000`), and the wrapper passes the caller's UID and GID with `--user`. Never run the compile as root, and never add `--privileged`, host networking or the Docker socket to the wrapper's `docker run`. `--init` (tini as PID 1) stays: it forwards signals and reaps Wine's leftover processes.
 - **SEC5:** The wrapper mounts only what a compile needs (ARC7) and the cache volume. It refuses to mount `/`, and it refuses a path that does not exist instead of letting Docker create it.
-- **SEC6:** Nothing writes into the user's tree except the `.ex4`/`.ex5` next to each source (ARC8).
+- **SEC6:** Nothing writes into the user's tree except the `.ex4`/`.ex5` next to each source (ARC8). A `--mt4-terminal`/`--mt5-terminal` folder is mounted read-only; a real terminal folder holds the user's saved broker logins (`Config/accounts.dat`), so it is never mounted writable, copied into the cache, or read beyond MetaEditor and the `MQL4`/`MQL5` folder.
 
 ## Pins and supply chain
 

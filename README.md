@@ -28,6 +28,7 @@ FAIL MQL5/Experts/Scalper.mq5 (1 errors, 0 warnings)
 - [What this fucker does](#what-this-fucker-does)
 - [Quick start](#quick-start)
 - [Using the damn thing](#using-the-damn-thing)
+  - [Bring your own terminal](#bring-your-own-terminal)
 - [How the sausage gets made](#how-the-sausage-gets-made)
 - [Environment variables](#environment-variables)
 - [GitHub Action](#github-action)
@@ -79,6 +80,7 @@ mql-compiler ~/a/MQL4/Experts/Grid.mq4 Foo.mq5  # files from all over the place,
 mql-compiler --text MQL5                        # OK/FAIL lines for humans
 mql-compiler --watch MQL5/Experts               # recompile on every save until Ctrl-C
 mql-compiler -I ~/libs/mql5 MQL5                # a shared library outside the tree
+mql-compiler --mt5-terminal ~/mt/RoboForex MQL5 # compile with your own portable terminal's MetaEditor
 mql-compiler --setup                            # just download and install the toolchain, compile nothing
 mql-compiler --help
 ```
@@ -86,6 +88,7 @@ mql-compiler --help
 | Option | What it does |
 |---|---|
 | `-I DIR`, `--include DIR` | Lays `DIR` over the standard `Include`, so `#include <MyLib/x.mqh>` also finds `DIR/MyLib/x.mqh`. Repeat it for more folders. The folder gets mounted too. |
+| `--mt4-terminal DIR`, `--mt5-terminal DIR` | Compiles `.mq4` (or `.mq5`) files with the MetaEditor and standard library of the portable terminal in `DIR` instead of the cached one. See [bring your own terminal](#bring-your-own-terminal). |
 | `--werror` | A file with warnings counts as failed (`status: "failed"`, exit `1`). |
 | `--watch` | Compiles, then compiles everything again whenever a `.mq4`, `.mq5` or `.mqh` under the given paths or `-I` folders changes. Runs until Ctrl-C. |
 | `--text` | `OK`/`FAIL` lines plus MetaEditor's own message lines, instead of JSON. |
@@ -99,7 +102,7 @@ mql-compiler --help
 
 1. **Paths get checked and mounted.** Every argument is a file or a folder, relative or absolute, anywhere on the box. No arguments means the current folder, so don't run it bare from your home folder unless you want all of it scanned (from `/` it refuses outright). A path that doesn't exist kills the run with exit `2` before anything compiles. The command mounts what's needed (see [the mounts](#how-the-sausage-gets-made)) and starts **one** container for the whole run.
 2. **The file list gets built.** A file is taken as is; a symlink is followed, and its output lands next to the real file. A folder is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order you gave them, and a file that shows up twice (named directly and through its folder) stays in its first spot only. Naming a `.mqh` or any other non-source file directly is exit `2`; inside a folder those are just skipped. A folder with no sources at all is exit `2` too.
-3. **The toolchain gets checked.** On the very first run this is where MT4 and MT5 get installed (about a minute and a half). After that it's a quick look at the cache.
+3. **The toolchain gets checked.** On the very first run this is where MT4 and MT5 get installed (about a minute and a half), and only the ones your sources need: a run of nothing but `.mq5` files installs just MT5, and a platform you handed your own terminal for never gets downloaded at all. After that it's a quick look at the cache.
 4. **Files compile one at a time, never in parallel,** in the order from step 2, MT4 and MT5 files mixed. **The extension alone picks the compiler:** `.mq4` goes to MT4's `metaeditor.exe`, `.mq5` to MT5's `MetaEditor64.exe`. The folder a file sits in doesn't change that. It only decides which `Include` the file sees: a `.mq4` looks for the nearest folder called `MQL4` above it, a `.mq5` for the nearest `MQL5` (any case, `mql5` works too). So a `.mq4` dumped inside `MQL5/Experts` still compiles with MT4, but it won't see `MQL5/Include`.
 5. **Results land next to the sources.** `Foo.mq5` gives `Foo.ex5` in the same folder, `Bar.mq4` gives `Bar.ex4`, owned by you, not root. The old `.ex4`/`.ex5` gets deleted right before each file compiles, so whatever sits there after the run came out of this run: no stale build that looks fresh, even when MetaEditor crashes. A failure doesn't stop the run; every file gets its turn.
 6. **You get the report.** On stdout, one JSON record per file as each one finishes, then a summary (see [what comes out](#what-comes-out)). Paths read relative to your current folder when they're inside it, absolute when they aren't. Errors point at the real file: your header for your header, and for a standard one the header's path in the toolchain (`/cache/uid-<UID>/wine/drive_c/...`, inside the cache volume). Progress and logs go to stderr as JSON lines too, so `mql-compiler 2>/dev/null` shows nothing but the results. A copy of the whole run, `--setup` and failed runs included, goes to `uid-<your UID>/logs/last-run.log` in the cache volume, replaced every run: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log` reads it.
@@ -134,6 +137,19 @@ stdout is [JSON Lines](https://jsonlines.org): one object per line, each with a 
 ### Keeping MetaEditor current
 
 The cache keeps whatever MetaEditor build got installed first, forever. `mql-compiler --version` shows which builds you're on, and `mql-compiler --update` reinstalls both from the newest installers (about a minute and a half). If the reinstall fails, the old toolchain comes back as it was.
+
+### Bring your own terminal
+
+Already got a portable MT4 or MT5 terminal sitting on disk, the folder with `terminal64.exe`, `MetaEditor64.exe` and `MQL5` side by side? Point the compiler at it and it uses that terminal's MetaEditor and that terminal's standard library instead of the cached ones:
+
+```bash
+mql-compiler --mt5-terminal "/trading/MT5 - SomeBroker" MQL5
+mql-compiler --mt4-terminal ~/mt4 --mt5-terminal ~/mt5 .   # both platforms
+```
+
+Handy when you need the exact MetaEditor build your broker's terminal runs, or when you'd rather not download anything: a platform with its own terminal is never downloaded or installed, so a first run with `--mt5-terminal` on `.mq5` files only sets up a bare Wine prefix. Your terminal gets mounted **read-only** and nothing gets written into it, except the `.ex4`/`.ex5` next to a source you compile from inside it (its own `MQL5` folder stays writable). The cached toolchain isn't touched either: leave the option off next time and you're back on the cached build.
+
+The terminal needs to have been started at least once, so it has unpacked its standard library (`MQL5/Include/Trade/Trade.mqh`, `MQL4/Include/stdlib.mqh`). A folder without MetaEditor or without those headers is exit `2` before anything compiles. `--version` with the option shows that terminal's build.
 
 Two runs at once take turns: they share one Wine install and one log file, so the second one logs that it's waiting and starts when the first is done. Handing everything to one run is faster.
 
@@ -175,7 +191,7 @@ MetaEditor gets that folder as its include root. Nothing gets written into your 
 - **The toolchain:** on the first run the script downloads the MT4 and MT5 installers, checks each one's Authenticode signature (valid digest, a certificate chain the image's CA bundle trusts, and a signing certificate whose common name starts with `MetaQuotes`; anything else gets refused), and installs both silently under Wine. If the certificate authority's revocation server is down, it retries three times, then checks everything but revocation and logs a warning with `reason=crl_unreachable`. The installers default to RoboForex's; point `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` at any broker's or MetaQuotes' own. The compiler inside is the same either way.
 - **The standard library:** the installers don't actually put it on disk. A terminal unpacks its `MQL4`/`MQL5` folder, standard headers included, the first time it starts. So setup starts each terminal once, headless, waits for `Trade/Trade.mqh` (MT5) and `stdlib.mqh` (MT4) to show up, and kills it. A few seconds each, once.
 - **The cache:** Wine itself is in the image; the Wine prefix with MT4 and MT5 installed in it is about 2 GB and lives in the Docker volume `mql-compiler-cache`, one folder per user ID, so everybody on a box shares a single volume. `docker volume rm mql-compiler-cache` nukes it and the next run installs again. The container runs as your UID, so the compiled files are yours.
-- **The mounts:** the command turns every path into an absolute one and mounts the folder whose `Include` it needs at the **same path** inside the container: the nearest `MQL4` above a `.mq4`, the nearest `MQL5` above a `.mq5`, the nearest of either above a folder, or the folder itself or the file's folder when there's no such parent. Nested ones collapse into one mount. It won't mount `/`, so a bare `mql-compiler` from `/` is refused. The container starts in your current folder, so the paths in the output are your real paths. On SELinux hosts, the mounts carry no `:z` label, so expect permission errors there.
+- **The mounts:** the command turns every path into an absolute one and mounts the folder whose `Include` it needs at the **same path** inside the container: the nearest `MQL4` above a `.mq4`, the nearest `MQL5` above a `.mq5`, the nearest of either above a folder, or the folder itself or the file's folder when there's no such parent. Nested ones collapse into one mount. A `--mt4-terminal`/`--mt5-terminal` folder is mounted read-only on top. It won't mount `/`, so a bare `mql-compiler` from `/` is refused. The container starts in your current folder, so the paths in the output are your real paths. On SELinux hosts, the mounts carry no `:z` label, so expect permission errors there.
 - **Compiling:** every file goes through MetaEditor's command-line compiler with `/inc` pointed at the merged folder from [how includes get resolved](#how-includes-get-resolved). MetaEditor's exit code is a lying piece of shit (it usually returns 1 when everything went fine), so the script ignores it, reads the `Result:` line of the compile log instead, and turns the Windows paths in there back into yours.
 
 ## Environment variables

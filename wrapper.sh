@@ -9,6 +9,9 @@
 #   mql-compiler ~/mt/MQL5/Experts       compile one folder, from anywhere
 #   mql-compiler Foo.mq5 /abs/Bar.mq4    compile these files
 #   mql-compiler -I ~/libs MQL5          add an include folder (mounted too)
+#   mql-compiler --mt5-terminal ~/mt5 MQL5
+#                                        compile with that portable terminal's
+#                                        MetaEditor (mounted read-only)
 #   mql-compiler --watch MQL5            recompile on every change until Ctrl-C
 #   mql-compiler --setup                 only install the MetaQuotes toolchain
 #   mql-compiler --help                  the compiler's own help, every option
@@ -130,6 +133,9 @@ workdir="$(pwd -P)"
 # are; sources by mount_root.
 args=()
 roots=()
+# --mt4-terminal / --mt5-terminal folders, mounted read-only: the compiler
+# only reads MetaEditor and the standard library from them.
+terminals=()
 compiles=true
 targets=0
 while (($#)); do
@@ -159,6 +165,24 @@ while (($#)); do
             folder="$(realpath "$folder")"
             args+=(-I "$folder")
             roots+=("$folder")
+            ;;
+        --mt4-terminal | --mt5-terminal | --mt4-terminal=* | --mt5-terminal=*)
+            case "$1" in
+                *=*)
+                    option="${1%%=*}"
+                    folder="${1#*=}"
+                    ;;
+                *)
+                    (($# >= 2)) || fail "$1 needs a folder"
+                    option="$1"
+                    shift
+                    folder="$1"
+                    ;;
+            esac
+            [[ -d "$folder" ]] || fail "no such terminal folder for $option: $folder"
+            folder="$(realpath "$folder")"
+            args+=("$option" "$folder")
+            terminals+=("$folder")
             ;;
         -*) args+=("$1") ;;
         *)
@@ -198,6 +222,17 @@ while IFS= read -r root; do
     kept+=("$root")
     docker_args+=(-v "$root:$root")
 done < <(printf '%s\n' ${roots[@]+"${roots[@]}"} | sort -u | sed '/^$/d')
+
+# A terminal folder already inside a read-write mount comes along with it.
+# Otherwise it is mounted read-only, and a source folder inside it (its own
+# MQL4/MQL5) stays read-write on top of it: Docker mounts parents first.
+for terminal in ${terminals[@]+"${terminals[@]}"}; do
+    [[ "$terminal" != "/" ]] || fail "refusing to mount / into the container: point the terminal option at the terminal's own folder"
+    for parent in ${kept[@]+"${kept[@]}"}; do
+        [[ "$terminal" == "$parent" || "$terminal" == "$parent/"* ]] && continue 2
+    done
+    docker_args+=(-v "$terminal:$terminal:ro")
+done
 
 # Forward installer overrides only when set, so the image keeps its defaults.
 for var in "${FORWARDED_VARS[@]}"; do
