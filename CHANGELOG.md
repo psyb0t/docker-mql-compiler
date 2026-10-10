@@ -2,6 +2,10 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.0, 2026-10-10
+
+- The cached MT4 and MT5 terminals are now portable folders, `terminals/mt4` and `terminals/mt5` in the cache volume, instead of installs under `Program Files`. After installing a terminal and unpacking its standard library, setup moves its folder there, and every compile uses it exactly like a `--mt4-terminal`/`--mt5-terminal` folder. An existing cache is moved on its next run, with no download; MetaEditor builds stay as they were.
+
 ## v0.4.0, 2026-10-10
 
 - `--mt4-terminal DIR` and `--mt5-terminal DIR` compile with the MetaEditor and standard library of a portable terminal you already have, instead of the cached install. The folder is mounted read-only and nothing is written into it, except the `.ex4`/`.ex5` of a source compiled from inside its own `MQL4`/`MQL5` folder. The cached toolchain stays as it was. A folder without MetaEditor, or whose terminal has never been started and so has not unpacked its standard library, is exit `2`. `--version` with the option reports that terminal's build.

@@ -57,6 +57,10 @@ readonly RUN_LOCK_FILE="$CACHE_ROOT/.run.lock"
 export HOME="$CACHE_ROOT/home"
 export WINEPREFIX="$CACHE_ROOT/wine"
 readonly DRIVE_C="$WINEPREFIX/drive_c"
+# Where setup moves each installed terminal, as a portable folder per platform
+# (terminals/mt4, terminals/mt5). Inside the prefix, so --update's rollback
+# moves it along, and free of spaces, unlike "Program Files".
+readonly CACHED_TERMINALS_DIR="$DRIVE_C/terminals"
 # --update moves the old prefix here and puts it back if the reinstall fails.
 readonly PREVIOUS_WINEPREFIX="$CACHE_ROOT/wine.previous"
 readonly IMAGE_VERSION_FILE="/usr/local/share/mql-compiler-version"
@@ -284,39 +288,53 @@ stdlib_marker() {
     esac
 }
 
-terminal_dir() {
+# The --mtN-terminal folder for a platform, or nothing.
+mounted_terminal() {
     case "$1" in
         mt4) printf '%s\n' "$TERMINAL_MT4" ;;
         mt5) printf '%s\n' "$TERMINAL_MT5" ;;
     esac
 }
 
-# The platform's MetaEditor: the one in its --mtN-terminal folder when given,
-# else the cached install's. Nothing when neither is there.
+# The portable terminal folder a platform compiles with: the mounted one when
+# given, else the cached one (which may not exist yet).
+terminal_dir() {
+    local mounted
+    mounted="$(mounted_terminal "$1")"
+    if [[ -n "$mounted" ]]; then
+        printf '%s\n' "$mounted"
+        return
+    fi
+    printf '%s/%s\n' "$CACHED_TERMINALS_DIR" "$1"
+}
+
+# The platform's MetaEditor in its terminal folder, or nothing.
 find_metaeditor() {
     local terminal
     terminal="$(terminal_dir "$1")"
-    if [[ -n "$terminal" ]]; then
-        find "$terminal" -maxdepth 1 -type f -iname "$(metaeditor_name "$1")" -print -quit
-        return
-    fi
-    [[ -d "$DRIVE_C" ]] || return 0
-    # Unreadable corners of a Wine prefix are irrelevant to the search.
-    find "$DRIVE_C" -path "$DRIVE_C/windows" -prune -o -iname "$(metaeditor_name "$1")" -print -quit 2>/dev/null
+    [[ -d "$terminal" ]] || return 0
+    find "$terminal" -maxdepth 1 -type f -iname "$(metaeditor_name "$1")" -print -quit
 }
 
-# The terminal's own MQL4/MQL5 folder, which holds its standard library.
+# A MetaEditor the installer put somewhere in the prefix (under Program
+# Files), outside the cached terminals folder, or nothing. Only a fresh
+# install or a cache from before v0.5.0 has one.
+find_installed_metaeditor() {
+    [[ -d "$DRIVE_C" ]] || return 0
+    # Unreadable corners of a Wine prefix are irrelevant to the search.
+    find "$DRIVE_C" \( -path "$DRIVE_C/windows" -o -path "$CACHED_TERMINALS_DIR" \) -prune \
+        -o -type f -iname "$(metaeditor_name "$1")" -print -quit 2>/dev/null
+}
+
+# The terminal's own MQL4/MQL5 folder, which holds its standard library. A
+# mounted terminal may spell it mql5 or Mql4; Windows does not care.
 stdlib_root() {
-    local editor terminal
+    local terminal found
     terminal="$(terminal_dir "$1")"
-    if [[ -n "$terminal" ]]; then
-        # A mounted terminal's folder may be spelled mql5 or Mql4; Windows
-        # does not care, and terminal_folder already checked it is there.
-        find "$terminal" -maxdepth 1 -type d -iname "$(mql_folder "$1")" -print -quit
-        return
-    fi
-    editor="$(find_metaeditor "$1")"
-    printf '%s/%s\n' "$(dirname "$editor")" "$(mql_folder "$1")"
+    # A cached terminal not installed yet has no folder to search; the
+    # default path below is then the answer.
+    found="$(find "$terminal" -maxdepth 1 -type d -iname "$(mql_folder "$1")" -print -quit 2>/dev/null)" || true
+    printf '%s\n' "${found:-$terminal/$(mql_folder "$1")}"
 }
 
 # A MetaEditor's FileVersion (such as 5.0.0.6249), read from the UTF-16
@@ -415,26 +433,26 @@ install_platform() {
     # the MetaEditor check below is the verdict.
     wine "$installer" /auto >/dev/null 2>&1 || true
     wineserver -w
-    if [[ -z "$(find_metaeditor "$platform")" ]]; then
+    if [[ -z "$(find_installed_metaeditor "$platform")" ]]; then
         log ERROR "install finished without a MetaEditor platform=$platform"
         return 1
     fi
-    log INFO "platform ready platform=$platform build=$(metaeditor_build "$platform")"
+    log INFO "installed platform=$platform path=$(dirname "$(find_installed_metaeditor "$platform")")"
 }
 
 # The installer leaves the standard library packed inside the terminal; the
 # terminal unpacks it into its MQL4/MQL5 folder the first time it starts.
-# Start it once in portable mode, wait for the headers, then stop it.
+# Start the terminal in folder $2 once in portable mode, wait for the
+# headers, then stop it.
 unpack_stdlib() {
-    local platform="$1" root marker terminal_dir waited=0
-    root="$(stdlib_root "$platform")"
+    local platform="$1" terminal="$2" root marker waited=0
+    root="$terminal/$(mql_folder "$platform")"
     marker="$root/$(stdlib_marker "$platform")"
     [[ -f "$marker" ]] && return 0
-    terminal_dir="$(dirname "$root")"
     log INFO "unpacking the standard library platform=$platform (starts the terminal once)"
     # The terminal never exits on its own; it is stopped below once the
     # headers are there, and its output is a GUI log nobody reads.
-    (cd "$terminal_dir" && wine "$(terminal_name "$platform")" /portable >/dev/null 2>&1 &)
+    (cd "$terminal" && wine "$(terminal_name "$platform")" /portable >/dev/null 2>&1 &)
     while [[ ! -f "$marker" ]] && ((waited < STDLIB_UNPACK_TIMEOUT_SECONDS)); do
         sleep "$POLL_SECONDS"
         waited=$((waited + POLL_SECONDS))
@@ -475,13 +493,34 @@ install_toolchain() {
         wineserver -w
     fi
     for platform in "${platforms[@]}"; do
-        if [[ -n "$(terminal_dir "$platform")" ]]; then
+        if [[ -n "$(mounted_terminal "$platform")" ]]; then
             log INFO "using a mounted terminal platform=$platform path=$(terminal_dir "$platform") build=$(metaeditor_build "$platform")"
             continue
         fi
-        [[ -n "$(find_metaeditor "$platform")" ]] || install_platform "$platform" "$(installer_url "$platform")" || return 1
-        unpack_stdlib "$platform" || return 1
+        if [[ -z "$(find_metaeditor "$platform")" ]]; then
+            [[ -n "$(find_installed_metaeditor "$platform")" ]] ||
+                install_platform "$platform" "$(installer_url "$platform")" || return 1
+            make_portable "$platform" || return 1
+        fi
+        unpack_stdlib "$platform" "$(terminal_dir "$platform")" || return 1
     done
+}
+
+# Turns the installer's terminal into the cached portable one: unpacks its
+# standard library where the installer put it, then moves the whole folder
+# from Program Files to terminals/<platform>. The cached terminal is then a
+# folder like any --mtN-terminal one, and every compile goes through the same
+# path. A cache from before v0.5.0 takes this step once, with no download.
+# The installer's registry and Start menu entries stay in the prefix; nothing
+# reads them.
+make_portable() {
+    local platform="$1" installed target
+    installed="$(dirname "$(find_installed_metaeditor "$platform")")"
+    target="$(terminal_dir "$platform")"
+    unpack_stdlib "$platform" "$installed" || return 1
+    mkdir -p "$CACHED_TERMINALS_DIR"
+    mv "$installed" "$target"
+    log INFO "moved the terminal to a portable folder platform=$platform from=$installed to=$target build=$(metaeditor_build "$platform")"
 }
 
 ensure_toolchain() {
@@ -561,7 +600,7 @@ user_mql_root() {
 # then the user's Include, each laid over the one before (the later file wins
 # on a clash), plus links to the user's other subfolders for #resource paths.
 # It lives in the staging folder because MetaEditor's /inc cannot take a path
-# with spaces, and the terminal sits under "Program Files". Built once per
+# with spaces, and a mounted terminal's folder often has some. Built once per
 # platform and user folder per pass.
 # -g keeps these global when tests/unit sources the script inside a function.
 declare -gA MERGED_ROOTS=()

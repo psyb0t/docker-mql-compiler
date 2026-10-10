@@ -18,6 +18,9 @@ readonly TEST_CACHE="${TEST_CACHE:?TEST_CACHE must be an absolute path}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly REPO_ROOT
 readonly WORK_ROOT="$REPO_ROOT/.testing/work"
+# The test cache's Wine drive_c, where the cached terminals live.
+CACHE_DRIVE_C="$TEST_CACHE/uid-$(id -u)/wine/drive_c"
+readonly CACHE_DRIVE_C
 readonly WORK_FROM_REPO=".testing/work"
 readonly WRAPPER="$REPO_ROOT/wrapper.sh"
 readonly EXIT_OK=0
@@ -540,12 +543,51 @@ test_watch() {
     expect_status "--watch stopped by docker stop" 130
 }
 
+# Passes when the cache holds both platforms as portable terminal folders
+# under drive_c/terminals and no MetaEditor is left under Program Files.
+expect_portable_cache() {
+    local name="$1" drive_c="$CACHE_DRIVE_C" leftover
+    # A prefix without a Program Files folder has nothing left over.
+    leftover="$(find "$drive_c/Program Files" -iname 'metaeditor*.exe' -print -quit 2>/dev/null)" || true
+    if [[ -n "$(find "$drive_c/terminals/mt5" -maxdepth 1 -iname metaeditor64.exe -print -quit)" ]] &&
+        [[ -n "$(find "$drive_c/terminals/mt4" -maxdepth 1 -iname metaeditor.exe -print -quit)" ]] &&
+        [[ -f "$drive_c/terminals/mt5/MQL5/Include/Trade/Trade.mqh" && -f "$drive_c/terminals/mt4/MQL4/Include/stdlib.mqh" ]] &&
+        [[ -z "$leftover" ]]; then
+        pass "$name"
+        return
+    fi
+    fail "$name" "terminals: $(find "$drive_c/terminals" -mindepth 1 -maxdepth 1 -printf '%f ' 2>&1); left in Program Files: ${leftover:-none}"
+}
+
+test_portable_cache() {
+    log "the cached terminals are portable folders"
+    local drive_c="$CACHE_DRIVE_C" legacy
+    expect_portable_cache "setup leaves both terminals as portable folders"
+    # A cache from before the move: the MT5 terminal back under Program
+    # Files. The next compile moves it, with no installer reachable.
+    legacy="$drive_c/Program Files/Legacy MT5 Terminal"
+    mv "$drive_c/terminals/mt5" "$legacy"
+    fresh_workdir
+    DOCKER_EXTRA=(-e MQL_COMPILER_MT5_URL=http://127.0.0.1:9/mt5.exe)
+    compile MQL5/Experts/StdLib.mq5
+    DOCKER_EXTRA=()
+    expect_status "a cache with the terminal under Program Files" "$EXIT_OK"
+    expect_log "an old install is moved, not downloaded again" 'moved the terminal to a portable folder platform=mt5'
+    if [[ -d "$legacy" ]]; then
+        fail "the old install folder is gone after the move" "$legacy still exists"
+    else
+        pass "the old install folder is gone after the move"
+    fi
+    expect_portable_cache "the moved terminal is a portable folder again"
+}
+
 test_update() {
     log "--update (reinstalls the toolchain, about a minute and a half)"
     compile --update
     expect_status "--update" "$EXIT_OK"
     expect_record "--update reports the new builds" '.type == "version" and .mt4_metaeditor != null and .mt5_metaeditor != null'
     expect_log "--update logs the reinstall" 'toolchain updated'
+    expect_portable_cache "--update leaves both terminals as portable folders"
     fresh_workdir
     compile MQL5/Experts/StdLib.mq5 MQL4/Experts/StdLib.mq4
     expect_status "compiling after --update" "$EXIT_OK"
@@ -932,6 +974,7 @@ main() {
     test_wrapper
     test_version
     test_setup
+    test_portable_cache
     test_run_log
     test_parallel_runs
     test_watch
