@@ -2,6 +2,12 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.1.2, 2026-10-10
+
+- The README is rewritten in the house voice, with the same commands and facts.
+- The agent skill has an installation reference, `.agents/skills/mql-compiler/references/installation.md`: per-user and system-wide installs, upgrades, uninstalling, custom installers, checks and troubleshooting.
+- `CLAUDE.md` is gone; `AGENTS.md` is the agent guide.
+
 ## v0.1.1, 2026-10-10
 
 - The installer signature check survives a flaky revocation server. It needs the certificate authority's revocation list, and when that download failed (as it did on GitHub's runners for v0.1.0, so no image was published) the whole first run failed. The check now retries three times. If the list still can't be fetched, it verifies the signature, digest and certificate chain without the online revocation lookup and logs a warning with `reason=crl_unreachable`. A bad digest, an untrusted chain or a revoked certificate still fails at once.

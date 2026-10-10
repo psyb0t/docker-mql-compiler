@@ -19,7 +19,7 @@ If `mql-compiler` is not on `PATH`, install it for the current user:
 curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh | bash
 ```
 
-It lands in `~/.local/bin`; if that is not on `PATH`, the installer prints the line to add. `--system` (with sudo) installs to `/usr/local/bin` instead.
+It lands in `~/.local/bin`; if that is not on `PATH`, the installer prints the line to add. For system-wide installs, upgrades, uninstalling, custom installers and troubleshooting, see [references/installation.md](references/installation.md).
 
 ## Compile
 
