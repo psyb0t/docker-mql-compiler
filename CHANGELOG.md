@@ -2,6 +2,13 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.3.2, 2026-10-10
+
+- Tests cover every feature. New end-to-end cases: a first run whose installer cannot be downloaded or has no signature, `--update` failing and putting the old toolchain back, `--setup`, a cache folder owned by another UID, the installer URL reaching the image, symlinks, lowercase `mql5` folders, the `-Idir` form, quotes in paths, an MT4 image `#resource`, `--watch` reacting to an `-I` folder and letting other runs in between passes, the GitHub Action's annotations, job summary and outputs, and `install.sh` (dev install, refusing foreign files, uninstall removing the pinned image).
+- `tests/unit/` runs entrypoint functions inside the image with one dependency stubbed: every branch of the installer signature check, including the revocation-list fallback, and a MetaEditor that writes no result.
+- `make test-all` adds a real release and `--rolling` install from Docker Hub; CI runs it.
+- The entrypoint runs `main` only when executed, so the unit tests can source it. No behavior changes.
+
 ## v0.3.1, 2026-10-10
 
 - Documentation only. The README's agent integrations section lists [peen](https://github.com/psyb0t/peen) among the agents the skill works with.

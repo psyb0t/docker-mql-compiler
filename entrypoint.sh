@@ -484,7 +484,8 @@ user_mql_root() {
 # It lives in the staging folder because MetaEditor's /inc cannot take a path
 # with spaces, and the terminal sits under "Program Files". Built once per
 # platform and user folder per pass.
-declare -A MERGED_ROOTS=()
+# -g keeps these global when tests/unit sources the script inside a function.
+declare -gA MERGED_ROOTS=()
 MERGED_ROOT=""
 
 build_merged_root() {
@@ -530,7 +531,7 @@ shown() {
 # folder (or, for a loose file, its own folder), so the path MetaEditor sees
 # has none, and "../" includes inside that folder still resolve. Sets
 # STAGED_SOURCE; one link per folder per pass.
-declare -A SOURCE_LINKS=()
+declare -gA SOURCE_LINKS=()
 STAGED_SOURCE=""
 
 stage_source() {
@@ -885,4 +886,7 @@ main() {
     ((FAILED_COUNT == 0)) || exit "$EXIT_COMPILE_ERRORS"
 }
 
-main "$@"
+# Sourcing the script (tests/unit) loads the functions without running a compile.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

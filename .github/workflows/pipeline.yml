@@ -36,7 +36,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: scripts/ci-dockerhub-login.sh
       - name: Test
-        run: make test
+        run: make test-all
       # The GitHub Action in this repository, run against the image make test
       # just built and the toolchain it installed.
       - name: Action compiles a good file

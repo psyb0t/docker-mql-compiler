@@ -7,7 +7,9 @@
 #
 # The first run downloads and installs the MetaQuotes toolchain into
 # TEST_CACHE (about a minute and a half); later runs reuse it. The --update
-# test reinstalls it once more. Needs jq on the host.
+# test reinstalls it once more. tests/unit holds unit scripts that run inside
+# the image. MQL_COMPILER_TEST_RELEASE_INSTALL=1 also runs a real release
+# install from Docker Hub (CI sets it). Needs jq and curl on the host.
 set -euo pipefail
 trap 'echo "[test] ERROR ${BASH_SOURCE[0]}:${LINENO}: command failed (exit $?)" >&2' ERR
 
@@ -49,6 +51,11 @@ fresh_workdir() {
     cp -r "$REPO_ROOT/tests/fixtures/." "$WORK_ROOT/"
 }
 
+# Extra `docker run` arguments for the next compile (mounts, -e overrides),
+# and the cache folder it uses; tests that need them set and reset them.
+DOCKER_EXTRA=()
+COMPILE_CACHE="$TEST_CACHE"
+
 # Runs the image by hand on the work copy; sets OUT (stdout), ERR (stderr)
 # and STATUS.
 compile() {
@@ -56,20 +63,21 @@ compile() {
     err_file="$(mktemp)"
     STATUS=0
     OUT="$(docker run --rm --user "$(id -u):$(id -g)" \
-        -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
+        -v "$WORK_ROOT":/src -v "$COMPILE_CACHE":/cache \
+        ${DOCKER_EXTRA[@]+"${DOCKER_EXTRA[@]}"} \
         "$IMAGE" "$@" 2>"$err_file")" || STATUS=$?
     ERR="$(cat "$err_file")"
     rm -f "$err_file"
 }
 
 # Runs wrapper.sh from folder $1 with the rest as arguments; sets OUT, ERR
-# and STATUS.
+# and STATUS. The toolchain comes from COMPILE_CACHE.
 wrapped() {
     local from="$1" err_file
     shift
     err_file="$(mktemp)"
     STATUS=0
-    OUT="$(cd "$from" && MQL_COMPILER_IMAGE="$IMAGE" MQL_COMPILER_VOLUME="$TEST_CACHE" \
+    OUT="$(cd "$from" && MQL_COMPILER_IMAGE="$IMAGE" MQL_COMPILER_VOLUME="$COMPILE_CACHE" \
         bash "$WRAPPER" "$@" 2>"$err_file")" || STATUS=$?
     ERR="$(cat "$err_file")"
     rm -f "$err_file"
@@ -395,11 +403,13 @@ wait_for_summaries() {
 test_watch() {
     log "--watch"
     fresh_workdir
+    mkdir -p "$WORK_ROOT/shared/Shared"
+    printf '%s\n' 'string SharedHello() { return "shared"; }' >"$WORK_ROOT/shared/Shared/Lib.mqh"
     local name="mql-compiler-test-watch-$$" out_file
     out_file="$(mktemp)"
     docker run --rm --init --name "$name" --user "$(id -u):$(id -g)" \
         -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
-        "$IMAGE" --watch MQL5/Scripts >"$out_file" 2>/dev/null &
+        "$IMAGE" --watch -I shared MQL5/Scripts >"$out_file" 2>/dev/null &
     local client_pid=$!
     if wait_for_summaries "$out_file" 1; then
         pass "--watch compiles once at the start"
@@ -411,6 +421,22 @@ test_watch() {
         pass "--watch compiles again after a change"
     else
         fail "--watch compiles again after a change" "no second summary within ${WATCH_TIMEOUT_SECONDS}s"
+    fi
+
+    # Between passes the watcher holds no lock, so a one-off run goes at once.
+    compile MQL5/Experts/Hello.mq5
+    expect_status "a run while --watch waits" "$EXIT_OK"
+    if grep -q 'waiting for it to finish' <<<"$ERR"; then
+        fail "a run while --watch waits does not queue behind it" "it waited for the watcher"
+    else
+        pass "a run while --watch waits does not queue behind it"
+    fi
+
+    printf '%s\n' '// changed' >>"$WORK_ROOT/shared/Shared/Lib.mqh"
+    if wait_for_summaries "$out_file" 3; then
+        pass "--watch compiles again after a change in an -I folder"
+    else
+        fail "--watch compiles again after a change in an -I folder" "no third summary within ${WATCH_TIMEOUT_SECONDS}s"
     fi
     docker stop "$name" >/dev/null
     local stop_status=0
@@ -433,6 +459,353 @@ test_update() {
     expect_status "compiling after --update" "$EXIT_OK"
 }
 
+test_update_rollback() {
+    log "--update that fails keeps the old toolchain"
+    local before
+    fresh_workdir
+    compile --version
+    before="$(jq -c '[.mt4_metaeditor, .mt5_metaeditor]' <<<"$OUT")"
+    DOCKER_EXTRA=(-e MQL_COMPILER_MT5_URL=file:///nonexistent/mt5setup.exe)
+    compile --update
+    DOCKER_EXTRA=()
+    expect_status "--update with an installer that cannot be downloaded" "$EXIT_USAGE"
+    expect_record "a failed --update is an error record" '.type == "error" and .message == "toolchain update failed (see the log lines above)"'
+    expect_log "a failed --update says it kept the old toolchain" '"level":"WARN".*reason=update_failed'
+    compile --version
+    if [[ "$(jq -c '[.mt4_metaeditor, .mt5_metaeditor]' <<<"$OUT")" == "$before" ]]; then
+        pass "the old MetaEditor builds are back after a failed --update"
+    else
+        fail "the old MetaEditor builds are back after a failed --update" "before $before, after $OUT"
+    fi
+    compile MQL5/Experts/StdLib.mq5 MQL4/Experts/StdLib.mq4
+    expect_status "compiling after a failed --update" "$EXIT_OK"
+}
+
+test_setup() {
+    log "--setup"
+    compile --setup
+    expect_status "--setup with the toolchain in place" "$EXIT_OK"
+    expect_record "--setup reports the installed builds" '.type == "version" and .mt4_metaeditor != null and .mt5_metaeditor != null'
+}
+
+# First runs that fail before anything is installed, each against its own
+# empty cache: a download that fails (through the wrapper, which proves the
+# installer URL reaches the container) and an installer with no signature.
+test_setup_failures() {
+    log "setup failures: an unreachable installer, an unsigned installer"
+    local cache="$REPO_ROOT/.testing/setup-failure-cache" fakes="$REPO_ROOT/.testing/fake-installers"
+    rm -rf "$cache" "$fakes"
+    mkdir -p "$cache" "$fakes"
+    # A real Windows program with no signature, taken from Wine itself.
+    cp "$(find "$TEST_CACHE"/uid-*/wine/drive_c/windows/system32 -maxdepth 1 -iname notepad.exe | head -n 1)" "$fakes/unsigned.exe"
+    fresh_workdir
+
+    COMPILE_CACHE="$cache"
+    MQL_COMPILER_MT5_URL=file:///nonexistent/mt5setup.exe wrapped "$WORK_ROOT" MQL5/Experts/Hello.mq5
+    expect_status "a first run whose installer cannot be downloaded" "$EXIT_USAGE"
+    expect_record "a failed setup is an error record" '.type == "error" and .message == "toolchain setup failed (see the log lines above)"'
+    expect_log "the wrapper hands MQL_COMPILER_MT5_URL to the image" 'installer download failed platform=mt5 url=file:///nonexistent/mt5setup\.exe'
+
+    DOCKER_EXTRA=(-v "$fakes":/fakes:ro -e MQL_COMPILER_MT5_URL=file:///fakes/unsigned.exe)
+    compile MQL5/Experts/Hello.mq5
+    DOCKER_EXTRA=()
+    COMPILE_CACHE="$TEST_CACHE"
+    expect_status "a first run with an unsigned installer" "$EXIT_USAGE"
+    expect_log "an unsigned installer fails the signature check" 'installer signature check failed file=mt5-setup\.exe'
+    if grep -q 'installing platform=mt5' <<<"$ERR"; then
+        fail "an unsigned installer never runs" "the log shows it being installed"
+    else
+        pass "an unsigned installer never runs"
+    fi
+    rm -rf "$cache" "$fakes"
+}
+
+test_cache_owned_by_another_uid() {
+    log "a cache folder that belongs to another UID"
+    local cache="$REPO_ROOT/.testing/foreign-cache" uid
+    uid="$(id -u)"
+    rm -rf "$cache"
+    mkdir -p "$cache/uid-$uid"
+    # Only root can hand the folder to another UID; a throwaway container does it.
+    docker run --rm -v "$cache":/c alpine chown 4242 "/c/uid-$uid"
+    fresh_workdir
+    COMPILE_CACHE="$cache"
+    compile MQL5/Experts/Hello.mq5
+    COMPILE_CACHE="$TEST_CACHE"
+    expect_status "a cache folder owned by another UID" "$EXIT_USAGE"
+    expect_record "the error names both UIDs" ".type == \"error\" and (.message | test(\"belongs to UID 4242, not $uid\"))"
+    docker run --rm -v "$cache":/c alpine rm -r "/c/uid-$uid"
+    rmdir "$cache"
+}
+
+test_path_edges() {
+    log "symlinks, lowercase folders, -I forms, quotes in paths"
+    fresh_workdir
+    ln -s Say.mq5 "$WORK_ROOT/MQL5/Scripts/Link.mq5"
+    wrapped "$WORK_ROOT" MQL5/Scripts/Link.mq5
+    expect_status "a symlink named directly" "$EXIT_OK"
+    expect_record "a symlink named directly compiles the real file" "$(file_is MQL5/Scripts/Say.mq5 ok) and .output == \"MQL5/Scripts/Say.ex5\""
+    compile MQL5/Scripts
+    expect_record "symlinked files inside a folder are skipped" '.type == "summary" and .total == 1'
+
+    mkdir -p "$WORK_ROOT/lower/mql5/Experts" "$WORK_ROOT/lower/mql5/Include"
+    cp -r "$REPO_ROOT/tests/fixtures/MQL5/Include/Fixture" "$WORK_ROOT/lower/mql5/Include/"
+    cp "$REPO_ROOT/tests/fixtures/MQL5/Experts/Hello.mq5" "$WORK_ROOT/lower/mql5/Experts/"
+    wrapped "$WORK_ROOT" lower/mql5/Experts/Hello.mq5
+    expect_status "a lowercase mql5 folder through the wrapper" "$EXIT_OK"
+    compile lower/mql5/Experts/Hello.mq5
+    expect_status "a lowercase mql5 folder by hand" "$EXIT_OK"
+
+    mkdir -p "$WORK_ROOT/shared/Shared"
+    printf '%s\n' 'string SharedHello() { return "shared"; }' >"$WORK_ROOT/shared/Shared/Lib.mqh"
+    printf '%s\n' '#include <Shared/Lib.mqh>' 'void OnStart() { Print(SharedHello()); }' >"$WORK_ROOT/MQL5/Scripts/UsesShared.mq5"
+    compile -Ishared MQL5/Scripts/UsesShared.mq5
+    expect_status "the -Idir short form" "$EXIT_OK"
+    compile MQL5/Scripts/UsesShared.mq5 -I
+    expect_status "-I with no folder" "$EXIT_USAGE"
+
+    wrapped "$REPO_ROOT" 'no"such.mq5'
+    expect_status "a missing path with a quote in it" "$EXIT_USAGE"
+    expect_record "the wrapper escapes quotes in its JSON error" '.type == "error" and .message == "no such file or folder: no\"such.mq5"'
+}
+
+# A 1x1 24-bit BMP, written byte by byte so no binary file lives in the repo.
+write_dot_bitmap() {
+    printf 'BM\x3a\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00\x28\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x18\x00\x00\x00\x00\x00\x04\x00\x00\x00\x13\x0b\x00\x00\x13\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\x00' >"$1"
+}
+
+test_mt4_resource() {
+    log "#resource on MT4"
+    fresh_workdir
+    mkdir -p "$WORK_ROOT/MQL4/Images"
+    write_dot_bitmap "$WORK_ROOT/MQL4/Images/dot.bmp"
+    # MQL4 has no resource variables; an image resource is the MT4 form.
+    printf '%s\n' \
+        '#property strict' \
+        '#resource "\\Images\\dot.bmp"' \
+        'int OnInit()' \
+        '{' \
+        '   ObjectCreate(0, "dot", OBJ_BITMAP_LABEL, 0, 0, 0);' \
+        '   ObjectSetString(0, "dot", OBJPROP_BMPFILE, "::Images\\dot.bmp");' \
+        '   return INIT_SUCCEEDED;' \
+        '}' \
+        'void OnTick() {}' >"$WORK_ROOT/MQL4/Experts/ResourceImage.mq4"
+    compile MQL4/Experts/ResourceImage.mq4
+    expect_status "an MT4 image resource" "$EXIT_OK"
+    expect_record "#resource reaches MQL4/Images" "$(file_is MQL4/Experts/ResourceImage.mq4 ok)"
+    rm -r "$WORK_ROOT/MQL4/Images"
+    compile MQL4/Experts/ResourceImage.mq4
+    expect_status "a missing MT4 image resource" "$EXIT_COMPILE_ERRORS"
+    expect_record "the missing MT4 resource is named" '.type == "file" and (.messages | any(.text | test("dot\\.bmp. not found")))'
+}
+
+# Runs one of the in-image unit scripts in tests/unit and counts its lines.
+run_unit() {
+    local script="$1" line lines=0
+    while IFS= read -r line; do
+        lines=$((lines + 1))
+        case "$line" in
+            "PASS "*) pass "unit: ${line#PASS }" ;;
+            "FAIL "*) fail "unit: ${line#FAIL }" "see tests/unit/$script.sh" ;;
+        esac
+    done < <(docker run --rm --user "$(id -u):$(id -g)" --entrypoint bash \
+        -v "$REPO_ROOT/tests/unit":/unit:ro -v "$TEST_CACHE":/cache \
+        "$IMAGE" "/unit/$script.sh" 2>/dev/null)
+    if ((lines == 0)); then
+        fail "unit: $script" "the script printed no results"
+    fi
+}
+
+test_units() {
+    log "unit checks inside the image: signature check, MetaEditor writing no result"
+    run_unit signature
+    run_unit no-result
+}
+
+# The GitHub Action's script with GitHub's files and variables faked.
+test_action() {
+    log "the GitHub Action script"
+    local dir="$REPO_ROOT/.testing/action" status
+    rm -rf "$dir"
+    mkdir -p "$dir"
+
+    action_env() {
+        env RUNNER_TEMP="$dir" RUNNER_OS=Linux GITHUB_OUTPUT="$dir/output" GITHUB_STEP_SUMMARY="$dir/summary" "$@"
+    }
+    : >"$dir/output"
+    action_env ACTION_REF=v9.8.7 bash "$REPO_ROOT/action/run.sh" prepare 2>/dev/null
+    : >"$dir/output.master"
+    env RUNNER_TEMP="$dir" RUNNER_OS=Linux GITHUB_OUTPUT="$dir/output.master" ACTION_REF=master \
+        bash "$REPO_ROOT/action/run.sh" prepare 2>/dev/null
+    : >"$dir/output.custom"
+    env RUNNER_TEMP="$dir" RUNNER_OS=Linux GITHUB_OUTPUT="$dir/output.custom" ACTION_REF=v9.8.7 INPUT_IMAGE=example/custom:1 \
+        bash "$REPO_ROOT/action/run.sh" prepare 2>/dev/null
+    OUT="$(cat "$dir/output") $(cat "$dir/output.master") $(cat "$dir/output.custom")"
+    expect_output "a release ref runs the matching image" 'image=psyb0t/mql-compiler:v9\.8\.7'
+    expect_output "a branch ref runs :latest" 'image=psyb0t/mql-compiler:latest'
+    expect_output "the image input wins" 'image=example/custom:1'
+    expect_output "the cache folder defaults to RUNNER_TEMP" "cache-dir=$dir/mql-compiler-cache"
+    expect_output "the cache key names the OS and the image" 'cache-key=mql-compiler-Linux-psyb0t-mql-compiler-v9\.8\.7'
+
+    fresh_workdir
+    printf '%s\n' 'void OnStart()' '{' '   double d = 1.5;' '   int i = d;' '   Print(i);' '}' >"$WORK_ROOT/MQL5/Scripts/Warn.mq5"
+    printf '%s\n' '#define CObject 1' '#include <Object.mqh>' 'void OnStart() {}' >"$WORK_ROOT/MQL5/Scripts/BreakStd.mq5"
+    : >"$dir/output"
+    : >"$dir/summary"
+    status=0
+    OUT="$(cd "$WORK_ROOT" && action_env ACTION_IMAGE="$IMAGE" ACTION_CACHE_DIR="$TEST_CACHE" \
+        INPUT_PATHS=$'MQL5/Experts/Broken.mq5\nMQL5/Scripts/Warn.mq5\nMQL5/Scripts/BreakStd.mq5\nMQL5/Experts/Hello.mq5' \
+        INPUT_WERROR=false bash "$REPO_ROOT/action/run.sh" compile 2>/dev/null)" || status=$?
+    STATUS="$status"
+    expect_status "the action with a broken file" "$EXIT_COMPILE_ERRORS"
+    expect_output "an error becomes an annotation on its line" "^::error file=MQL5/Experts/Broken\\.mq5,line=5,col=4,title=MQL error 256::undeclared identifier 'undeclared_function'$"
+    expect_output "a warning becomes a warning annotation" '^::warning file=MQL5/Scripts/Warn\.mq5,line=4,col=10,title=MQL warning 43::'
+    expect_output "an error in a standard header has no file" '^::error line=[0-9]+,col=[0-9]+,title=MQL error [0-9]+::'
+    OUT="$(cat "$dir/summary")"
+    # The backticks are literal Markdown in the summary, not a command.
+    # shellcheck disable=SC2016
+    expect_output "the job summary has a row per file" '^\| `MQL5/Experts/Hello\.mq5` \| mt5 \| ok \| 0 \| 0 \|$'
+    expect_output "the job summary has the totals" '^2 of 4 compiled, 2 failed\.$'
+    OUT="$(cat "$dir/output")"
+    expect_output "the step outputs the counts" 'total=4'
+    expect_output "the step outputs the results file" "results=$dir/mql-compiler-results\\.jsonl"
+
+    : >"$dir/output"
+    status=0
+    OUT="$(cd "$WORK_ROOT" && action_env ACTION_IMAGE="$IMAGE" ACTION_CACHE_DIR="$TEST_CACHE" \
+        INPUT_PATHS=$'MQL5/Scripts/Warn.mq5' INPUT_WERROR=true bash "$REPO_ROOT/action/run.sh" compile 2>/dev/null)" || status=$?
+    STATUS="$status"
+    expect_status "the action with werror and a warning" "$EXIT_COMPILE_ERRORS"
+
+    status=0
+    OUT="$(cd "$WORK_ROOT" && action_env ACTION_IMAGE="$IMAGE" ACTION_CACHE_DIR="$TEST_CACHE" \
+        INPUT_PATHS='does/not/exist.mq5' bash "$REPO_ROOT/action/run.sh" compile 2>/dev/null)" || status=$?
+    STATUS="$status"
+    expect_status "the action with a missing path" "$EXIT_USAGE"
+    expect_output "a run that cannot start becomes an error annotation" '^::error title=mql-compiler::no such file or folder: does/not/exist\.mq5$'
+    rm -rf "$dir"
+}
+
+# install.sh against a throwaway HOME. The dev install uses the local :dev
+# image and needs no network.
+test_install() {
+    log "install.sh"
+    local home="$REPO_ROOT/.testing/install-home" command status
+    command="$home/.local/bin/mql-compiler"
+    if [[ "$IMAGE" != "psyb0t/mql-compiler:dev" ]]; then
+        log "skipping install.sh tests: they need IMAGE=psyb0t/mql-compiler:dev"
+        return
+    fi
+    rm -rf "$home"
+    mkdir -p "$home"
+
+    install_sh() {
+        status=0
+        OUT="$(HOME="$home" TMPDIR="$home" bash "$REPO_ROOT/install.sh" "$@" 2>&1)" || status=$?
+        STATUS="$status"
+    }
+
+    MQL_COMPILER_ENV=dev install_sh --user
+    expect_status "a dev install" "$EXIT_OK"
+    if [[ -x "$command" ]] && grep -q 'mql-compiler-managed-command' "$command" && grep -qx 'readonly PINNED_IMAGE="psyb0t/mql-compiler:dev"' "$command"; then
+        pass "the installed command carries the marker and the :dev pin"
+    else
+        fail "the installed command carries the marker and the :dev pin" "$command is missing, not executable, or pinned elsewhere"
+    fi
+    status=0
+    OUT="$(MQL_COMPILER_VOLUME="$TEST_CACHE" "$command" --version 2>/dev/null)" || status=$?
+    STATUS="$status"
+    expect_status "the installed command runs" "$EXIT_OK"
+    expect_record "the installed command reports the image version" ".type == \"version\" and .version == \"$(cat "$REPO_ROOT/VERSION")\""
+
+    MQL_COMPILER_ENV=dev install_sh --user
+    expect_status "installing over a managed command" "$EXIT_OK"
+
+    MQL_COMPILER_ENV=bogus install_sh --user
+    expect_status "an unknown MQL_COMPILER_ENV" 1
+    install_sh --frobnicate
+    expect_status "an unknown installer option" 1
+    if ((EUID != 0)); then
+        install_sh --system
+        expect_status "--system without root" 1
+        expect_output "--system without root says it needs root" 'needs root'
+    fi
+
+    printf '#!/bin/sh\necho mine\n' >"$command"
+    MQL_COMPILER_ENV=dev install_sh --user
+    expect_status "installing over somebody else's file" 1
+    expect_output "the installer names the file it will not touch" 'was not installed by this installer'
+    install_sh --user --uninstall
+    expect_status "uninstalling somebody else's file" 1
+    if grep -q 'echo mine' "$command"; then
+        pass "the foreign file is left alone"
+    else
+        fail "the foreign file is left alone" "$command was changed"
+    fi
+
+    rm "$command"
+    MQL_COMPILER_ENV=dev install_sh --user
+    install_sh --user --uninstall
+    expect_status "uninstalling a dev install" "$EXIT_OK"
+    if [[ ! -e "$command" ]] && docker image inspect psyb0t/mql-compiler:dev >/dev/null 2>&1; then
+        pass "uninstall removes the command and keeps the local :dev image"
+    else
+        fail "uninstall removes the command and keeps the local :dev image" "command still there or :dev image gone"
+    fi
+
+    # A command pinned to a throwaway tag of the image under test: uninstall
+    # removes that pinned image.
+    docker tag "$IMAGE" psyb0t/mql-compiler:uninstall-test
+    mkdir -p "$(dirname "$command")"
+    sed 's|^readonly PINNED_IMAGE=.*|readonly PINNED_IMAGE="psyb0t/mql-compiler:uninstall-test"|' "$WRAPPER" >"$command"
+    install_sh --user --uninstall
+    expect_status "uninstalling a release install" "$EXIT_OK"
+    if docker image inspect psyb0t/mql-compiler:uninstall-test >/dev/null 2>&1; then
+        fail "uninstall removes the pinned image" "psyb0t/mql-compiler:uninstall-test still exists"
+    else
+        pass "uninstall removes the pinned image"
+    fi
+
+    test_release_install "$home" "$command"
+    rm -rf "$home"
+}
+
+# The real release install: resolves the newest release on GitHub and pulls its
+# image, then --rolling pins :latest and drops the release image. Needs the
+# network and replaces local psyb0t/mql-compiler release images, so it runs
+# only with MQL_COMPILER_TEST_RELEASE_INSTALL=1 (CI sets it).
+test_release_install() {
+    local home="$1" command="$2" latest pinned
+    if [[ "${MQL_COMPILER_TEST_RELEASE_INSTALL:-}" != "1" ]]; then
+        log "skipping the release install: set MQL_COMPILER_TEST_RELEASE_INSTALL=1 to pull from Docker Hub"
+        return
+    fi
+    log "install.sh: release and --rolling installs from Docker Hub"
+    latest="$(curl -fsSL https://api.github.com/repos/psyb0t/docker-mql-compiler/releases/latest | jq -r .tag_name)"
+    install_sh --user
+    expect_status "a release install" "$EXIT_OK"
+    pinned="$(sed -n 's/^readonly PINNED_IMAGE="\(.*\)"$/\1/p' "$command")"
+    if [[ "$pinned" == "psyb0t/mql-compiler:$latest" ]]; then
+        pass "a release install pins the newest release"
+    else
+        fail "a release install pins the newest release" "pinned $pinned, newest release $latest"
+    fi
+    install_sh --user --rolling
+    expect_status "a --rolling install" "$EXIT_OK"
+    if grep -qx 'readonly PINNED_IMAGE="psyb0t/mql-compiler:latest"' "$command"; then
+        pass "--rolling pins :latest"
+    else
+        fail "--rolling pins :latest" "$(grep PINNED_IMAGE "$command")"
+    fi
+    if docker image inspect "psyb0t/mql-compiler:$latest" >/dev/null 2>&1; then
+        fail "an upgrade drops the image it replaced" "psyb0t/mql-compiler:$latest is still there"
+    else
+        pass "an upgrade drops the image it replaced"
+    fi
+    install_sh --user --uninstall
+    expect_status "uninstalling the --rolling install" "$EXIT_OK"
+}
+
 test_usage() {
     log "usage errors"
     fresh_workdir
@@ -453,18 +826,27 @@ test_usage() {
 main() {
     mkdir -p "$TEST_CACHE"
     test_whole_tree
+    test_units
     test_output_formats
     test_warnings
     test_extra_includes
     test_selection
     test_include_errors
     test_reported_paths
+    test_path_edges
+    test_mt4_resource
     test_nested_platform_folders
     test_wrapper
     test_version
+    test_setup
     test_run_log
     test_parallel_runs
     test_watch
+    test_action
+    test_install
+    test_setup_failures
+    test_cache_owned_by_another_uid
+    test_update_rollback
     test_update
     test_usage
     rm -rf "$WORK_ROOT"

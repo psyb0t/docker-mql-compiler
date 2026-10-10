@@ -17,11 +17,12 @@ Data flow: `mql-compiler` (host) -> `docker run` -> `entrypoint.sh` -> Wine -> M
 
 - Bash scripts, a Debian trixie image with Wine 10 (64-bit and `wine32:i386`), Xvfb, osslsigncode, jq, inotify-tools.
 - No MetaQuotes software in the image or the repo: the first run downloads the RoboForex installers (or `MQL_COMPILER_MT4_URL`/`MQL_COMPILER_MT5_URL`), checks their Authenticode signature (trusted chain, signing certificate's CN starting with "MetaQuotes", see SEC1), and installs them with `/auto`.
-- CI: `.github/workflows/pipeline.yml` runs `make lint` and `make test`, then the action itself against the freshly built `:dev` image (`uses: ./`), then the reusable docker-image workflow (amd64 only, Grype scan) and, on tags, the ClawHub skill publish.
+- CI: `.github/workflows/pipeline.yml` runs `make lint` and `make test-all`, then the action itself against the freshly built `:dev` image (`uses: ./`), then the reusable docker-image workflow (amd64 only, Grype scan) and, on tags, the ClawHub skill publish.
 
 ## Layout
 
-- `tests/test.sh`: end-to-end tests, by hand (`/src`) and through `wrapper.sh` from other folders, against copies of `tests/fixtures/`: an `MQL4` and an `MQL5` tree with experts, indicators, scripts, their own `Include` (including a header that shadows a standard one), a `#resource` file, standard-library users, a broken file, and a loose file outside both trees.
+- `tests/test.sh`: end-to-end tests, by hand (`/src`) and through `wrapper.sh` from other folders, against copies of `tests/fixtures/`: an `MQL4` and an `MQL5` tree with experts, indicators, scripts, their own `Include` (including a header that shadows a standard one), a `#resource` file, standard-library users, a broken file, and a loose file outside both trees. Other cases (symlinks, lowercase folders, an MT4 image resource, setup failures, a foreign-UID cache, the Action script, `install.sh`) build their files at run time.
+- `tests/unit/`: scripts that run inside the image and test entrypoint functions with one dependency stubbed (the signature report, MetaEditor writing no result).
 - `action.yml`, `action/run.sh`: the GitHub Action, tested in CI with `uses: ./`.
 - `.agents/skills/mql-compiler/SKILL.md`: the agent skill published to ClawHub.
 - `.agents/rules/`: the project rules (ARC, SH, TST, SEC, DOC, CHAT), not published.
@@ -31,7 +32,8 @@ Data flow: `mql-compiler` (host) -> `docker run` -> `entrypoint.sh` -> Wine -> M
 
 ```bash
 make build     # image as :dev, :v<VERSION>, :latest
-make test      # first run installs the toolchain into .testing/cache (about 90 s)
+make test      # first run installs the toolchain into .testing/cache (about 90 s); about 5 minutes after that
+make test-all  # make test plus a real release install from Docker Hub (what CI runs)
 make lint      # shellcheck, shfmt (-i 4 -ci), hadolint
 make sec       # gitleaks, hadolint, grype
 make install   # :dev image + command from this checkout

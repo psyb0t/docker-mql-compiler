@@ -12,13 +12,13 @@ HADOLINT_IMAGE   := hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e
 GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 GRYPE_IMAGE      := anchore/grype:v0.120.1@sha256:e4a44ef45d285b829ce6efe2642980329661bd2d18eab5fc539138d4adaebbbe
 
-SHELL_SCRIPTS := entrypoint.sh wrapper.sh install.sh action/run.sh tests/test.sh scripts/ci-dockerhub-login.sh
+SHELL_SCRIPTS := entrypoint.sh wrapper.sh install.sh action/run.sh tests/test.sh tests/unit/lib.sh tests/unit/signature.sh tests/unit/no-result.sh scripts/ci-dockerhub-login.sh
 # The toolchain cache the tests reuse between runs (gitignored).
 TEST_CACHE    := $(CURDIR)/.testing/cache
 GRYPE_SEVERITY ?= high
 RUN_AS_ME     := --user $$(id -u):$$(id -g)
 
-.PHONY: help version build install uninstall test lint format sec sec-secrets sec-image sec-dockerfile clean
+.PHONY: help version build install uninstall test test-all lint format sec sec-secrets sec-image sec-dockerfile clean
 
 help: ## Show the documented targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ uninstall: ## Remove the installed mql-compiler command (the toolchain volume is
 
 test: build ## Compile the fixtures with the built image (first run downloads the toolchain into .testing/cache)
 	IMAGE=$(IMAGE_NAME):$(DEV_TAG) TEST_CACHE=$(TEST_CACHE) bash tests/test.sh
+
+test-all: build ## make test plus a real release install from Docker Hub (replaces local psyb0t/mql-compiler release images; what CI runs)
+	IMAGE=$(IMAGE_NAME):$(DEV_TAG) TEST_CACHE=$(TEST_CACHE) MQL_COMPILER_TEST_RELEASE_INSTALL=1 bash tests/test.sh
 
 lint: ## shellcheck + shfmt on the scripts, hadolint on the Dockerfile
 	docker run --rm -v "$(CURDIR)":/mnt:ro -w /mnt $(SHELLCHECK_IMAGE) $(SHELL_SCRIPTS)
