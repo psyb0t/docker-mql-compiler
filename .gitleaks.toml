@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignored local test state: the downloaded toolchain cache and scratch copies of the fixtures"
+paths = [
+  '''(^|/)\.testing(?:/|$)''',
+  '''(^|/)\.secaudit(?:/|$)''',
+]

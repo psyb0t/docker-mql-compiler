@@ -1,0 +1,79 @@
+name: pipeline
+
+on: [push]
+
+jobs:
+  # Docker Hub rate-limits anonymous pulls per runner IP, which the hosted
+  # runners share, and lint and test pull their tool images from there. The
+  # login script retries and falls back to anonymous pulls.
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Login to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: scripts/ci-dockerhub-login.sh
+      - name: Lint
+        run: make lint
+
+  # Builds the image and compiles the fixtures with it, which downloads and
+  # installs the real MT4 and MT5 toolchains.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Login to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: scripts/ci-dockerhub-login.sh
+      - name: Test
+        run: make test
+
+  badges:
+    if: github.ref_name == github.event.repository.default_branch || startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    uses: psyb0t/reusable-github-workflows/.github/workflows/create-badges.yml@master
+
+  call-docker-image-workflow:
+    needs: [lint, test]
+    permissions:
+      contents: write # GitHub Release
+      security-events: write # upload the Grype SARIF to the Security tab
+    uses: psyb0t/reusable-github-workflows/.github/workflows/docker-image-workflow.yml@master
+
+    with:
+      repository_name: psyb0t/mql-compiler
+      # MT4's MetaEditor is a 32-bit Windows program: the image needs Wine's
+      # i386 half, which exists only on amd64.
+      target_platforms: "linux/amd64"
+      scan_severity: "high"
+      cache_mode: "min"
+      # Report scan findings to the Security tab but don't fail the run, so the
+      # clawhub publish job below can depend on this workflow succeeding.
+      scan_fail_build: false
+
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # Publish the skill (.agents/skills/) to ClawHub. Tag pushes ONLY, and only
+  # after the Docker image build/push + GitHub release have succeeded.
+  publish-to-clawhub:
+    needs: [call-docker-image-workflow]
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: psyb0t/reusable-github-workflows/.github/workflows/clawhub-publish.yml@master
+    with:
+      publish_plugins: false
+
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

@@ -1,0 +1,29 @@
+# Test state: the downloaded toolchain cache and scratch fixture copies
+.testing/
+
+# Compiler output from running the tool inside the repo
+*.ex4
+*.ex5
+
+# Secrets, never commit
+.env
+.env.*
+*.env
+
+# Local tooling and agent scratch, never commit
+git-update.sh
+CODEX.local.md
+ANUSTIMES.md
+PLAN.md
+NOTES.md
+TODO.md
+WIP.md
+.research_files/
+.agent_notes/
+.agent_knowledge/
+.anustimes/
+.plan-and-delegate/
+.secaudit/
+.vscode/
+.idea/
+.envrc
