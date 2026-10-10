@@ -12,16 +12,18 @@
 #   mql-compiler --help                  the compiler's own help
 #
 # Paths may be relative or absolute and sit anywhere. For each one this
-# mounts its nearest enclosing MQL4/MQL5 folder (so its Include and other
-# folders come along), or, outside any MQL4/MQL5 folder, the folder itself or
-# the file's folder. Mounts go to the same absolute path in the container and
+# mounts the folder it includes from (so its Include and other folders come
+# along): the nearest MQL4 above a .mq4, MQL5 above a .mq5, either above a
+# folder, or, outside any of them, the folder itself or the file's folder.
+# It never mounts /. Mounts go to the same absolute path in the container and
 # the container starts in the current folder, so every path in the output is
-# one you can open. The toolchain (Wine plus MT4 and MT5, about 2 GB) lives
-# in the Docker volume mql-compiler-cache, not in your home folder; `docker
+# your real one. The toolchain (a Wine prefix with MT4 and MT5, about 2 GB)
+# lives in the Docker volume mql-compiler-cache, not in your home folder; `docker
 # volume rm mql-compiler-cache` frees it and the next run downloads it again.
 # The container runs as your UID, so compiled files belong to you.
 #
-# Exit status: 0 all compiled, 1 compile errors, 2 usage or setup failure.
+# Exit status: 0 all compiled, 1 compile errors, 2 usage or setup failure;
+# Docker's own code (usually 125) when Docker itself fails.
 #
 # Environment:
 #   MQL_COMPILER_IMAGE    run this image instead of the pinned one
@@ -42,12 +44,14 @@ fail() {
     exit "$EXIT_USAGE"
 }
 
-# The nearest folder named MQL4 or MQL5 (any case) at or above $1, or nothing.
+# The nearest folder at or above $1 whose name (any case) is one of the rest,
+# or nothing.
 mql_ancestor() {
     local dir="$1" name folder
+    shift
     while [[ "$dir" != "/" ]]; do
         name="$(basename "$dir" | tr '[:lower:]' '[:upper:]')"
-        for folder in "${MQL_FOLDERS[@]}"; do
+        for folder in "$@"; do
             if [[ "$name" == "$folder" ]]; then
                 printf '%s\n' "$dir"
                 return 0
@@ -57,12 +61,25 @@ mql_ancestor() {
     done
 }
 
+# The folders whose Include a path can use: MQL4 for a .mq4, MQL5 for a .mq5
+# (the same rule the image applies), either for a folder or any other file.
+include_folders() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        *.mq4) printf '%s\n' MQL4 ;;
+        *.mq5) printf '%s\n' MQL5 ;;
+        *) printf '%s\n' "${MQL_FOLDERS[@]}" ;;
+    esac
+}
+
 # The folder to mount so the compiler sees $1 and everything it includes.
 mount_root() {
-    local path="$1" dir root
+    local path="$1" dir root folders
     dir="$path"
     [[ -d "$path" ]] || dir="$(dirname "$path")"
-    root="$(mql_ancestor "$dir")"
+    folders="$(include_folders "$path")"
+    # Word splitting is wanted: folders is a list of plain folder names.
+    # shellcheck disable=SC2086
+    root="$(mql_ancestor "$dir" $folders)"
     printf '%s\n' "${root:-$dir}"
 }
 
@@ -102,8 +119,10 @@ docker_args=(
 # it. Sorted, a parent always comes before its children.
 kept=()
 while IFS= read -r root; do
+    # Docker refuses to mount / over the container's own root.
+    [[ "$root" != "/" ]] || fail "refusing to mount / into the container: name the folders or files to compile"
     for parent in ${kept[@]+"${kept[@]}"}; do
-        [[ "$parent" == "/" || "$root" == "$parent" || "$root" == "$parent/"* ]] && continue 2
+        [[ "$root" == "$parent" || "$root" == "$parent/"* ]] && continue 2
     done
     kept+=("$root")
     docker_args+=(-v "$root:$root")

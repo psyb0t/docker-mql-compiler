@@ -1,0 +1,19 @@
+# Testing rules
+
+Prefix: TST.
+
+## What every change needs
+
+- **TST1:** `make test` passes before a change is called done. It builds the image and runs `tests/test.sh`, the same suite CI runs. A change to any `.sh` file or the `Dockerfile` also needs `make lint`.
+- **TST2:** Every bug fix comes with a test that fails without the fix. The standard-library bug shipped in v0.1.x because no fixture used a standard header; a behaviour with no fixture is a behaviour nobody checked.
+- **TST3:** Every new behaviour of the command or the image (an option, a path rule, an include rule, an output format, an exit code) gets a test in `tests/test.sh` in the same change.
+- **TST4:** Tests name the behaviour they check (`"a user header replaces the MQL5 standard one"`, `"paths outside the current folder print absolute"`), so a failing line says what broke.
+
+## How the suite works
+
+- **TST5:** The suite is end to end: it runs the built image, by hand (`compile`, sources at `/src`) and through `wrapper.sh` (`wrapped`, from other folders with relative and absolute paths), and checks stdout, the exit status and the files written. Keep both paths covered; the wrapper's mounts are where path bugs live.
+- **TST6:** Each test group starts from `fresh_workdir`, a copy of `tests/fixtures/` in `.testing/work`, so outputs never land in the repository and one test cannot leak into the next.
+- **TST7:** Fixtures under `tests/fixtures/` mirror a real tree: `MQL4/` and `MQL5/` with `Experts`, `Indicators`, `Scripts`, `Include` and `Files`, plus `loose/` outside both. A fixture that must fail or must prove an override says so in a comment at its top (`Broken.mq5`, `Override.mq5`, the shadowing `VirtualKeys.mqh` and `WinUser32.mqh`).
+- **TST8:** A fixture that proves an include or resource is used must fail to compile when it is missing (`Override.mq5` uses a macro only the user's header defines; the missing-resource test removes `MQL5/Files`). A test that passes either way proves nothing.
+- **TST9:** `.testing/cache` holds the installed toolchain between runs (about 2 GB, about 90 seconds to build). To test setup itself, remove only the part under test (for example the unpacked `MQL5`/`MQL4` folders in the install directories), not the whole cache, and list it before deleting. CI always starts from an empty cache, so it covers a full first run.
+- **TST10:** Test values are made up. No broker account, login or server appears in a fixture.

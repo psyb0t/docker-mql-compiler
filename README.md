@@ -37,15 +37,15 @@ $ echo $?
 ## What this fucker does
 
 - **Real MetaEditor, both flavours.** MT4's 32-bit `metaeditor.exe` for `.mq4`, MT5's `MetaEditor64.exe` for `.mq5`. The actual MetaQuotes compilers, not some reverse-engineered knockoff that chokes on half your includes.
-- **One command, CLI-shaped.** Point it at files or folders, get `OK`/`FAIL` per file, compiler errors with file, line and column, and an exit code your scripts and CI can trust: `0` clean, `1` compile errors, `2` you fucked up the arguments.
+- **One command, CLI-shaped.** Point it at files or folders, get `OK`/`FAIL` per file, compiler errors with file, line and column, and an exit code your scripts and CI can trust: `0` clean, `1` compile errors, `2` you fucked up the arguments or the setup died.
 - **Includes work like in the terminal.** `#include <Trade/Trade.mqh>` finds the MetaQuotes standard library, `#include <MyStuff/Thing.mqh>` finds your own `Include` folder, and if you hacked a standard header in your tree, your copy wins.
 - **Point it at anything, from anywhere.** Files, folders, relative paths, absolute paths, MT4 and MT5 mixed in one run. Experts, indicators, scripts, libraries, it doesn't give a shit what the program is. No `cd` dance.
-- **No MetaQuotes binaries in the image.** The first run downloads the MT4 and MT5 installers, refuses to run any that MetaQuotes didn't sign, and caches the installed toolchain in a Docker volume. After that, a compile takes a few seconds.
+- **No MetaQuotes binaries in the image.** The first run downloads the MT4 and MT5 installers, refuses to run any that MetaQuotes' own certificate didn't sign, and caches the installed toolchain in a Docker volume. After that, a compile takes a few seconds.
 - **Installs like a normal tool.** One `curl | bash`, one file on your `PATH`, no config folder crapping up your home directory.
 
 ## Quick start
 
-All you need is Docker, installed and running.
+All you need is Docker, installed and running, on an x86-64 (amd64) box. MT4's MetaEditor is 32-bit Windows code and needs Wine's i386 half, so there's no ARM image: Apple Silicon and other ARM machines are out unless Docker emulates amd64 for you.
 
 ```bash
 # per user: drops the command into ~/.local/bin
@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/i
 curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh | sudo bash -s -- --system
 ```
 
-The installer pins the newest release image and writes the `mql-compiler` command. That single file is the entire install. Run the installer again to upgrade; it throws away the image it replaced. `--rolling` pins `:latest` instead of a release, and `--uninstall` gets rid of the command.
+The installer pins the newest release image and writes the `mql-compiler` command. That single file is the entire install. Run the installer again to upgrade; it throws away the image it replaced. `--rolling` pins `:latest` instead of a release, and `--uninstall` gets rid of the command and its image. The cache volume stays, since every user on the box shares it; `docker volume rm mql-compiler-cache` takes it out.
 
 Then go to a folder full of MQL sources and run `mql-compiler`. The first run spends about a minute and a half downloading and installing MT4 and MT5 into a Docker volume. Every run after that takes seconds.
 
@@ -72,11 +72,19 @@ mql-compiler --setup                            # just download and install the 
 mql-compiler --help
 ```
 
-- **Arguments** are files to compile or folders to search, recursively, for `.mq4` and `.mq5`. No arguments means the current folder. Paths can be relative or absolute and live anywhere on the box. A file named twice (directly and through its folder) compiles once.
-- **Order:** one file after another, sorted by path. `.mq4` goes to MT4's MetaEditor, `.mq5` to MT5's.
-- **Outputs** land next to their sources and belong to you, not root: `Foo.mq5` gives `Foo.ex5`, `Bar.mq4` gives `Bar.ex4`.
-- **Output:** one `OK` or `FAIL` line per file, then that file's errors and warnings. Paths read relative to your current folder when they're inside it, absolute when they aren't. Progress and logs go to stderr as JSON lines, so `mql-compiler 2>/dev/null` shows nothing but the results.
-- **Exit status:** `0` every file compiled, `1` at least one has compile errors, `2` bad path, bad option, or the toolchain couldn't be installed.
+### What happens when you run it
+
+1. **Paths get checked and mounted.** Every argument is a file or a folder, relative or absolute, anywhere on the box. No arguments means the current folder, so don't run it bare from your home folder unless you want all of it scanned (from `/` it refuses outright). A path that doesn't exist kills the run with exit `2` before anything compiles. The command mounts what's needed (see [the mounts](#how-the-sausage-gets-made)) and starts **one** container for the whole run.
+2. **The file list gets built.** A file is taken as is; a symlink is followed, and its output lands next to the real file. A folder is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order you gave them, and a file that shows up twice (named directly and through its folder) stays in its first spot only. Naming a `.mqh` or any other non-source file directly is exit `2`; inside a folder those are just skipped. A folder with no sources at all is exit `2` too.
+3. **The toolchain gets checked.** On the very first run this is where MT4 and MT5 get installed (about a minute and a half). After that it's a quick look at the cache.
+4. **Files compile one at a time, never in parallel,** in the order from step 2, MT4 and MT5 files mixed. **The extension alone picks the compiler:** `.mq4` goes to MT4's `metaeditor.exe`, `.mq5` to MT5's `MetaEditor64.exe`. The folder a file sits in doesn't change that. It only decides which `Include` the file sees: a `.mq4` looks for the nearest folder called `MQL4` above it, a `.mq5` for the nearest `MQL5` (any case, `mql5` works too). So a `.mq4` dumped inside `MQL5/Experts` still compiles with MT4, but it won't see `MQL5/Include`.
+5. **Results land next to the sources.** `Foo.mq5` gives `Foo.ex5` in the same folder, `Bar.mq4` gives `Bar.ex4`, owned by you, not root. The old `.ex4`/`.ex5` gets deleted right before each file compiles, so whatever sits there after the run came out of this run: no stale build that looks fresh, even when MetaEditor crashes. A failure doesn't stop the run; every file gets its turn.
+6. **You get the report.** On stdout, one `OK` or `FAIL` line per file, then that file's errors and warnings, as each file finishes. Paths read relative to your current folder when they're inside it, absolute when they aren't. Errors point at the real file: your header for your header, and for a standard one the header's path in the toolchain (`/cache/uid-<UID>/wine/drive_c/...`, inside the cache volume). Progress and logs go to stderr as JSON lines, so `mql-compiler 2>/dev/null` shows nothing but the results. A copy of the whole run, `--setup` and failed runs included, goes to `uid-<your UID>/logs/last-run.log` in the cache volume, replaced every run: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log` reads it.
+7. **The exit status sums it up:** `0` every file compiled, `1` at least one has compile errors (or MetaEditor choked and wrote no result), `2` bad path, bad option, nothing to compile, or the toolchain couldn't be installed. If Docker itself fails (daemon down, image can't be pulled), you get Docker's own code, usually `125`.
+
+Two runs at once take turns: they share one Wine install and one log file, so the second one logs that it's waiting and starts when the first is done. Handing everything to one run is faster.
+
+Paths with spaces work. MetaEditor itself chokes on them, so such a file gets compiled through a space-free link to its `MQL4`/`MQL5` folder (or its own folder, when it's loose), and the messages show your real paths again.
 
 ### How your tree should look
 
@@ -93,14 +101,16 @@ anywhere/
     └── Include/          # your MT5 headers
 ```
 
-`MQL4` and `MQL5` don't have to be siblings and don't have to sit anywhere special. A file outside any `MQL4`/`MQL5` folder still compiles; it just gets the standard library and no `Include` of yours.
+`MQL4` and `MQL5` don't have to be siblings and don't have to sit anywhere special. A file outside any `MQL4`/`MQL5` folder still compiles; it just gets the standard library, no `Include` of yours, and no `\\`-rooted `#resource` paths.
+
+The container only sees the mounted folder (the `MQL4`/`MQL5` one, or a loose file's own folder), read-write. An `#include "../../elsewhere/x.mqh"` or a symlink that points out of it is a missing file in there.
 
 ### How includes get resolved
 
-MetaEditor reads `#include <...>` from exactly one `Include` folder. Your sources need two: the MetaQuotes standard library and your own headers. So for every compile, the tool builds a throwaway folder that has both:
+MetaEditor reads `#include <...>` from exactly one `Include` folder. Your sources need two: the MetaQuotes standard library and your own headers. So the tool builds a throwaway folder that has both, once per platform and `MQL4`/`MQL5` folder in a run:
 
-1. Links to the terminal's standard `Include` (`Trade/`, `Arrays/`, `stdlib.mqh`, the whole lot).
-2. Links to the files in the `Include` of the nearest `MQL4`/`MQL5` folder above your source, laid on top. Same path in both? **Yours wins.** Edited `Trade/Trade.mqh` in your tree? Your version gets compiled.
+1. Links to the matching terminal's standard `Include` (`Trade/`, `Arrays/`, `stdlib.mqh`, the whole lot): MT4's for a `.mq4`, MT5's for a `.mq5`.
+2. Links to the files in the `Include` of the nearest `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder above your source, laid on top. Same path in both? **Yours wins.** Edited `Trade/Trade.mqh` in your tree? Your version gets compiled.
 3. Links to the rest of that `MQL4`/`MQL5` folder (`Files`, `Images`, `Indicators`, ...), so `#resource "\\Files\\data.txt"` and friends resolve.
 
 MetaEditor gets that folder as its include root. Nothing gets written into your folders or the terminal's, and the folder is gone when the run ends. `#include "..."` resolves next to the source, as always.
@@ -108,10 +118,10 @@ MetaEditor gets that folder as its include root. Nothing gets written into your 
 ## How the sausage gets made
 
 - **The image** is Debian trixie with Wine 10 (the 64-bit half plus the 32-bit half that MT4's ancient MetaEditor needs), Xvfb as a fake display nobody ever looks at, and one bash script. Not a single MetaQuotes byte in it.
-- **The toolchain:** on the first run the script downloads the MT4 and MT5 installers, checks that each is validly code-signed by MetaQuotes (anything else gets refused), and installs both silently under Wine. The installers default to RoboForex's; point `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` at any broker's or MetaQuotes' own. The compiler inside is the same either way.
-- **The standard library:** the installers don't actually put it on disk. A terminal unpacks its `MQL4`/`MQL5` folder, standard headers included, the first time it starts. So setup starts each terminal once, headless, waits for `Trade/Trade.mqh` (MT5) and `stdlib.mqh` (MT4) to show up, and kills it. A few seconds each, and a cache from an older version gets it on its next run.
-- **The cache:** the installed toolchain is about 2 GB and lives in the Docker volume `mql-compiler-cache`, one folder per user ID, so everybody on a box shares a single volume. `docker volume rm mql-compiler-cache` nukes it and the next run installs again. The container runs as your UID, so the compiled files are yours.
-- **The mounts:** the command turns every path into an absolute one and mounts the nearest `MQL4`/`MQL5` folder above it (or the folder itself, or the file's folder, when there's no such parent) at the **same path** inside the container. Nested ones collapse into one mount. The container starts in your current folder, so the paths in the output are paths you can actually open.
+- **The toolchain:** on the first run the script downloads the MT4 and MT5 installers, checks each one's Authenticode signature (valid digest, a certificate chain the image's CA bundle trusts, and a signing certificate whose common name starts with `MetaQuotes`; anything else gets refused), and installs both silently under Wine. If the certificate authority's revocation server is down, it retries three times, then checks everything but revocation and logs a warning with `reason=crl_unreachable`. The installers default to RoboForex's; point `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` at any broker's or MetaQuotes' own. The compiler inside is the same either way.
+- **The standard library:** the installers don't actually put it on disk. A terminal unpacks its `MQL4`/`MQL5` folder, standard headers included, the first time it starts. So setup starts each terminal once, headless, waits for `Trade/Trade.mqh` (MT5) and `stdlib.mqh` (MT4) to show up, and kills it. A few seconds each, once.
+- **The cache:** Wine itself is in the image; the Wine prefix with MT4 and MT5 installed in it is about 2 GB and lives in the Docker volume `mql-compiler-cache`, one folder per user ID, so everybody on a box shares a single volume. `docker volume rm mql-compiler-cache` nukes it and the next run installs again. The container runs as your UID, so the compiled files are yours.
+- **The mounts:** the command turns every path into an absolute one and mounts the folder whose `Include` it needs at the **same path** inside the container: the nearest `MQL4` above a `.mq4`, the nearest `MQL5` above a `.mq5`, the nearest of either above a folder, or the folder itself or the file's folder when there's no such parent. Nested ones collapse into one mount. It won't mount `/`, so a bare `mql-compiler` from `/` is refused. The container starts in your current folder, so the paths in the output are your real paths. On SELinux hosts, the mounts carry no `:z` label, so expect permission errors there.
 - **Compiling:** every file goes through MetaEditor's command-line compiler with `/inc` pointed at the merged folder from [how includes get resolved](#how-includes-get-resolved). MetaEditor's exit code is a lying piece of shit (it usually returns 1 when everything went fine), so the script ignores it, reads the `Result:` line of the compile log instead, and turns the Windows paths in there back into yours.
 
 ## Environment variables
@@ -125,21 +135,22 @@ The `mql-compiler` command reads these:
 | `MQL_COMPILER_MT4_URL` | RoboForex's MT4 installer | MT4 installer for the first run |
 | `MQL_COMPILER_MT5_URL` | RoboForex's MT5 installer | MT5 installer for the first run |
 
-The installer URLs only matter while the toolchain is being installed. To switch an existing cache to another broker's installers, kill the volume first.
+The installer URLs only matter while the toolchain is being installed. To use another broker's installers, point `MQL_COMPILER_VOLUME` at a new volume name for that first run and keep using it. `docker volume rm mql-compiler-cache` works too, but it throws away every user's toolchain on the box.
 
 ## Running the image by hand
 
 The command is just a thin `docker run`. Doing it yourself:
 
 ```bash
+# run from the folder that holds MQL5/
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -v "$PWD":/src \
   -v mql-compiler-cache:/cache \
-  psyb0t/mql-compiler:latest MQL5/Experts
+  psyb0t/mql-compiler:v0.2.1 MQL5/Experts
 ```
 
-Mount your sources at `/src` and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder (or its parent), not just `Experts`, or your `Include` stays outside. Paths inside the container work too: mount a folder at the same path and pass `-w "$PWD"` and absolute paths, which is exactly what the command does.
+Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.
 
 ## Agent integrations
 

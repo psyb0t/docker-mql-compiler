@@ -6,9 +6,10 @@
 #
 # Every argument is a file to compile or a folder to search (recursively) for
 # .mq4 and .mq5 files; no argument means the current folder. Relative paths
-# start from the current folder. Each file goes to the compiler for its
-# extension (.mq4 to MT4's MetaEditor, .mq5 to MT5's), one after another in
-# path order, and its .ex4/.ex5 lands next to it.
+# start from the current folder. Arguments keep their order, each folder's
+# files are sorted, and a file named twice compiles once. Each file goes to
+# the compiler for its extension (.mq4 to MT4's MetaEditor, .mq5 to MT5's),
+# one at a time, and its .ex4/.ex5 lands next to it.
 #
 # Includes: MetaEditor reads `#include <...>` from exactly one folder,
 # <root>/Include. For each compile the root is a merged folder: the
@@ -43,7 +44,9 @@ readonly CACHE_ROOT="/cache/uid-$CALLER_UID"
 readonly INSTALLER_DIR="$CACHE_ROOT/installers"
 readonly LOG_DIR="$CACHE_ROOT/logs"
 readonly LOG_FILE="$LOG_DIR/last-run.log"
-readonly LOCK_FILE="$CACHE_ROOT/.setup.lock"
+# Held for a whole run: two runs share one Wine prefix and one log file, so a
+# second run waits for the first instead of tripping over it.
+readonly RUN_LOCK_FILE="$CACHE_ROOT/.run.lock"
 export HOME="$CACHE_ROOT/home"
 export WINEPREFIX="$CACHE_ROOT/wine"
 readonly DRIVE_C="$WINEPREFIX/drive_c"
@@ -61,6 +64,8 @@ readonly MT5_STDLIB_MARKER="Include/Trade/Trade.mqh"
 readonly INCLUDE_FOLDER="include"
 readonly STDLIB_UNPACK_TIMEOUT_SECONDS=120
 readonly POLL_SECONDS=2
+# The signing certificate's common name must start with this. Only the signer
+# counts, not the chain or timestamp certificates in the same report.
 readonly SIGNER_PATTERN="MetaQuotes"
 readonly SIGNATURE_ATTEMPTS=3
 # osslsigncode's words when it could not get a CRL (its own typo included).
@@ -93,27 +98,37 @@ die() {
 
 usage() {
     cat <<'EOF'
-Usage: mql-compiler [FILE or FOLDER ...]
+Usage: mql-compiler [--setup | -h | --help] [FILE or FOLDER ...]
 
   (no arguments)  compile every .mq4 and .mq5 under the current folder
   a file          compile that file (expert, indicator, script or library)
   a folder        compile every .mq4 and .mq5 inside it, recursively
 
-Paths may be relative or absolute. .mq4 files go to MT4's MetaEditor and
-.mq5 files to MT5's, one after another in path order. Each .ex4/.ex5 lands
-next to its source.
+Paths may be relative or absolute. Arguments are taken in the order given,
+each folder's files sorted by path, a file named twice only once. Files
+compile one at a time, never in parallel, and a failure does not stop the
+run. A second run started meanwhile waits for this one.
+
+The extension picks the compiler: .mq4 goes to MT4's MetaEditor, .mq5 to
+MT5's. Each .ex4/.ex5 lands next to its source; the old one is deleted
+before the file compiles, so an output after the run is from this run.
 
 #include <...> finds both the MetaQuotes standard library and the Include
-folder of the nearest MQL4/ or MQL5/ folder above the source; a file of yours
-replaces the standard one with the same name. #resource "\\Files\\..." starts
-at that MQL4/MQL5 folder. #include "..." resolves next to the source. A
-source outside any MQL4/MQL5 folder gets the standard library only.
+folder of the nearest folder above the source named MQL4 (for a .mq4) or
+MQL5 (for a .mq5); a file of yours replaces the standard one with the same
+name. #resource "\\Files\\..." starts at that MQL4/MQL5 folder. #include
+"..." resolves next to the source. A source outside any MQL4/MQL5 folder
+gets the standard library only.
 
-  --setup   only download and install the MetaQuotes toolchain and unpack
-            its standard library
-  --help    show this help
+Results go to stdout, JSON logs to stderr, and both to
+/cache/uid-<UID>/logs/last-run.log in the cache volume.
 
-Exit status: 0 all compiled, 1 compile errors, 2 usage or setup failure.
+  --setup     only download and install the MetaQuotes toolchain and
+              unpack its standard library
+  -h, --help  show this help
+
+Exit status: 0 all compiled, 1 compile errors, 2 bad path or option,
+nothing to compile, or setup failure.
 EOF
 }
 
@@ -121,6 +136,8 @@ EOF
 
 XVFB_PID=""
 STAGING_DIR=""
+TEE_STDOUT_PID=""
+TEE_STDERR_PID=""
 
 start_display() {
     # Xvfb's own chatter is noise in a compile log; failures surface when
@@ -145,6 +162,35 @@ cleanup() {
     if [[ -n "$STAGING_DIR" ]]; then
         rm -rf "$STAGING_DIR"
     fi
+}
+
+# The EXIT trap once output is going to the log. Docker kills every process
+# in the container when this script ends, so the tee processes would lose
+# whatever they had not written yet: close their input and wait for them.
+finish() {
+    cleanup
+    exec >&- 2>&-
+    # Nothing is left to report a failure to; the exit status is the script's.
+    wait "$TEE_STDOUT_PID" "$TEE_STDERR_PID" || true
+}
+
+# Two runs share one Wine prefix and one log file, so they take turns. The
+# lock lives on fd 8 until the container exits.
+acquire_run_lock() {
+    exec 8>"$RUN_LOCK_FILE"
+    if flock -n 8; then
+        return
+    fi
+    log INFO "another mql-compiler run is using this cache, waiting for it to finish"
+    flock 8
+}
+
+start_logging() {
+    exec > >(tee "$LOG_FILE")
+    TEE_STDOUT_PID=$!
+    exec 2> >(tee -a "$LOG_FILE" >&2)
+    TEE_STDERR_PID=$!
+    trap finish EXIT
 }
 
 # -------------------------------------------------------------- toolchain ---
@@ -224,10 +270,13 @@ verify_installer() {
     require_signer "$name" "$report"
 }
 
+# osslsigncode lists the signer first, as the first Subject line under
+# "Signer's certificate:"; the chain and timestamp certificates follow.
 require_signer() {
-    local name="$1" report="$2"
-    if ! grep -qi "Subject:.*$SIGNER_PATTERN" <<<"$report"; then
-        log ERROR "installer is validly signed but not by $SIGNER_PATTERN file=$name"
+    local name="$1" report="$2" subject
+    subject="$(awk '/^Signer.s certificate:/ { found = 1 } found && /Subject:/ { print; exit }' <<<"$report")"
+    if [[ "$subject" != *"/CN=$SIGNER_PATTERN"* ]]; then
+        log ERROR "installer is validly signed but not by $SIGNER_PATTERN file=$name signer=${subject#*Subject: }"
         return 1
     fi
     log INFO "installer signature ok signer=$SIGNER_PATTERN file=$name"
@@ -284,12 +333,6 @@ unpack_stdlib() {
 
 ensure_toolchain() {
     mkdir -p "$HOME" "$INSTALLER_DIR"
-    if [[ -e "$WINEPREFIX" && ! -O "$WINEPREFIX" ]]; then
-        die "$WINEPREFIX belongs to UID $(stat -c %u "$WINEPREFIX"), not $CALLER_UID: the cache was written by another UID"
-    fi
-    # One setup at a time: parallel first runs share the same cache.
-    exec 9>"$LOCK_FILE"
-    flock 9
     if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
         log INFO "creating the Wine prefix path=$WINEPREFIX"
         # wineboot prints first-run noise about missing Mono/Gecko, which a
@@ -301,7 +344,6 @@ ensure_toolchain() {
     [[ -n "$(find_metaeditor mt4)" ]] || install_platform mt4 "$MT4_INSTALLER_URL" || die "MT4 setup failed"
     unpack_stdlib mt5 || die "MT5 standard library setup failed"
     unpack_stdlib mt4 || die "MT4 standard library setup failed"
-    flock -u 9
 }
 
 # ---------------------------------------------------------------- include ---
@@ -365,22 +407,75 @@ shown() {
     printf '%s\n' "$1"
 }
 
-sed_escape() {
-    printf '%s' "$1" | sed 's/[][\.*^$|/]/\\&/g'
+# MetaEditor's /compile, like /inc, cannot take a path with spaces. Such a
+# source is compiled through a link in the staging folder to its MQL4/MQL5
+# folder (or, for a loose file, its own folder), so the path MetaEditor sees
+# has none, and "../" includes inside that folder still resolve. Sets
+# STAGED_SOURCE; one link per folder per run.
+declare -A SOURCE_LINKS=()
+STAGED_SOURCE=""
+
+stage_source() {
+    local source="$1" root="$2" link
+    STAGED_SOURCE="$source"
+    [[ "$source" =~ [[:space:]] ]] || return 0
+    link="${SOURCE_LINKS[$root]:-}"
+    if [[ -z "$link" ]]; then
+        link="$STAGING_DIR/sources/${#SOURCE_LINKS[@]}"
+        mkdir -p "$STAGING_DIR/sources"
+        ln -s "$root" "$link"
+        SOURCE_LINKS[$root]="$link"
+    fi
+    STAGED_SOURCE="$link${source#"$root"}"
+}
+
+# A path inside the staging folder, turned into the real file behind it: the
+# user's file for a user header or a staged source, the toolchain's for a
+# standard header. A missing include in the merged include root reads as if
+# under $shown_root, the user's MQL4/MQL5 folder or, for a loose file, the
+# terminal's.
+real_path() {
+    local path="$1" merged="$2" shown_root="$3" target
+    if target="$(readlink -e -- "$path")"; then
+        printf '%s\n' "$target"
+        return
+    fi
+    if [[ "$path" == "$merged/"* ]]; then
+        printf '%s\n' "$shown_root${path#"$merged"}"
+        return
+    fi
+    readlink -m -- "$path"
 }
 
 # MetaEditor writes its log as UTF-16 with Windows paths. This prints plain
-# UTF-8 lines with those paths turned back into real ones: Z:\ is /, the
-# merged include root reads as $3 (the user's MQL4/MQL5 folder, or the
-# terminal's for a loose file), and the current folder is dropped from the
-# front.
+# UTF-8 lines with those paths turned back into real ones: Z:\ is /, a path
+# in the staging folder becomes the file behind it (real_path), and the
+# current folder is dropped from the front. Plain string replacement rather
+# than sed, so no character in a path can break it.
 read_log() {
-    local log_file="$1" merged="$2" shown_root="$3"
-    iconv -f UTF-16 -t UTF-8 "$log_file" | tr -d '\r' | sed \
-        -e 's|\\|/|g' \
-        -e 's|[Zz]:/|/|g' \
-        -e "s|$(sed_escape "$merged")|$(sed_escape "$shown_root")|g" \
-        -e "s|$(sed_escape "$PWD/")||g"
+    local log_file="$1" merged="$2" shown_root="$3" line path rest quote
+    iconv -f UTF-16 -t UTF-8 "$log_file" | tr -d '\r' | while IFS= read -r line; do
+        line="${line//\\//}"
+        line="${line//[Zz]:\//\/}"
+        rest="$line"
+        while [[ "$rest" == *"$STAGING_DIR/"* ]]; do
+            rest="$STAGING_DIR/${rest#*"$STAGING_DIR/"}"
+            # A path in a MetaEditor line ends at its "(line,column)" or at
+            # the closing quote of a "file '...' not found" message.
+            path="${rest%%[\'\(]*}"
+            line="${line//"$path"/"$(real_path "$path" "$merged" "$shown_root")"}"
+            rest="${rest#"$path"}"
+        done
+        # Paths start a line or follow a quote; only there is the current
+        # folder a prefix to drop.
+        for quote in "'" '"'; do
+            line="${line//"$quote$PWD/"/$quote}"
+        done
+        if [[ "$line" == "$PWD/"* ]]; then
+            line="${line#"$PWD"/}"
+        fi
+        printf '%s\n' "$line"
+    done
 }
 
 compile_one() {
@@ -391,14 +486,19 @@ compile_one() {
     esac
     user_root="$(user_mql_root "$source" "$(mql_folder "$platform")")"
     build_merged_root "$platform" "$user_root"
+    stage_source "$source" "${user_root:-$(dirname "$source")}"
     shown_root="${user_root:-$(stdlib_root "$platform")}"
     editor="$(find_metaeditor "$platform")"
     log_file="$(mktemp --suffix=.log)"
+    # An old .ex4/.ex5 must never outlive a compile that did not produce a new
+    # one. MetaEditor removes it on compile errors, but not when it crashes or
+    # writes no result.
+    rm -f "$output"
 
     # MetaEditor's exit code is backwards (1 usually means success); the log's
     # Result line is the verdict, and its stderr is Wine noise.
     wine "$editor" \
-        "/compile:$(winepath -w "$source")" \
+        "/compile:$(winepath -w "$STAGED_SOURCE")" \
         "/log:$(winepath -w "$log_file")" \
         "/inc:$(winepath -w "$MERGED_ROOT")" >/dev/null 2>&1 || true
 
@@ -458,8 +558,13 @@ main() {
     done
     ((${#targets[@]})) || targets=(".")
 
+    # Wine refuses a prefix owned by another UID, so say so before trying.
+    if [[ -e "$CACHE_ROOT" && ! -O "$CACHE_ROOT" ]]; then
+        die "$CACHE_ROOT belongs to UID $(stat -c %u "$CACHE_ROOT"), not $CALLER_UID: the cache was written by another UID"
+    fi
     mkdir -p "$LOG_DIR"
-    exec > >(tee "$LOG_FILE") 2> >(tee -a "$LOG_FILE" >&2)
+    acquire_run_lock
+    start_logging
 
     local sources=() listing
     if [[ "$setup_only" == false ]]; then
@@ -472,7 +577,6 @@ main() {
 
     STAGING_DIR="$(mktemp -d /tmp/mql-compiler.XXXXXX)"
     start_display
-    trap cleanup EXIT
     ensure_toolchain
     if [[ "$setup_only" == true ]]; then
         log INFO "toolchain ready path=$CACHE_ROOT"

@@ -2,12 +2,31 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.2.1, 2026-10-10
+
+- Paths with spaces compile. MetaEditor wrote no result for a source whose path had a space in it, so every such file failed with "MetaEditor wrote no result". The file is now compiled through a space-free link to its `MQL4`/`MQL5` folder (or its own folder when loose), and the messages show the real paths.
+- A stale `.ex4`/`.ex5` no longer survives a failed compile. MetaEditor deletes the old output when a file has errors, but not a read-only one and not when it writes no result. The old output is now deleted before each file compiles.
+- Two runs at once no longer collide. They shared one Wine prefix and one log file; now a run holds a lock for its whole length, and a second run logs that it is waiting and starts when the first ends.
+- The run log keeps its last lines. A run that failed quickly could leave `last-run.log` empty, because the container exited before the copy was written. The script now waits for it.
+- Errors in standard headers point at the real file, its path in the toolchain. They showed the header under your own `Include` folder, where no such file exists.
+- A path with `&` in it no longer garbles the messages. Path rewriting uses plain string replacement instead of `sed`, and drops the current folder only where a path starts.
+- A `.mq4` inside an `MQL5` folder inside an `MQL4` folder finds its includes. The command mounted the nearest `MQL4` or `MQL5` folder, while the compiler looks for `MQL4` above a `.mq4` and `MQL5` above a `.mq5`; the command now mounts the folder the compiler uses.
+- Running with no path from `/` fails with exit `2` and a message, instead of Docker refusing the mount with exit `125`.
+- The signer check reads only the signing certificate. It accepted "MetaQuotes" anywhere in any subject of the report; it now requires the signing certificate's common name to start with `MetaQuotes`.
+- `--uninstall` removes the image the command was pinned to. The local `:dev` image and the cache volume stay.
+- The README walks through a run step by step: the file order, one file at a time in one container, how the extension picks MT4 or MT5, how the `MQL4`/`MQL5` folder picks the includes, where the `.ex4`/`.ex5` and the run log go, and how to read the log.
+- The docs no longer claim files compile in path order across arguments. The order is the arguments as given, each folder's files sorted, a duplicate only once.
+- The exit codes are documented in full: no sources found exits `2`, a file MetaEditor wrote no result for counts as `1`, and a Docker failure returns Docker's own code (usually `125`).
+- The README, the skill and the installation reference cover the amd64-only image, what the container can see, symlinks, parallel runs, switching installers with a new `MQL_COMPILER_VOLUME`, and every error message the tool prints.
+- `--help` lists `--setup` and `-h` in its synopsis and says where the run log goes.
+- `.agents/rules/` holds the project rules for contributors, linked from `AGENTS.md`.
+
 ## v0.2.0, 2026-10-10
 
-- Standard-library includes work. `#include <Trade/Trade.mqh>`, `<stdlib.mqh>` and the rest failed with "file not found" in v0.1.x because the installers leave the standard library packed and MetaEditor takes a single include root. Setup now starts each terminal once to unpack its `MQL4`/`MQL5` folder, and an existing cache does this on its next run without a reinstall.
+- Standard-library includes work. `#include <Trade/Trade.mqh>`, `<stdlib.mqh>` and the rest failed with "file not found" in v0.1.x because the installers leave the standard library packed and MetaEditor takes a single include root. Setup now starts each terminal once to unpack its `MQL4`/`MQL5` folder.
 - Every compile gets a temporary include root: the terminal's standard `Include` with the `Include` of the nearest `MQL4`/`MQL5` folder above the source laid over it, plus links to that folder's other subfolders. Your headers and the standard ones both resolve, a header of yours with the same path as a standard one wins, and `#resource "\\Files\\..."` paths resolve. Nothing is written into your folders or the toolchain.
 - A source outside any `MQL4`/`MQL5` folder compiles against the standard library alone.
-- Paths can be absolute or relative and sit anywhere; no `cd` needed. The command mounts the nearest `MQL4`/`MQL5` folder above each path (or the folder, or the file's folder) at the same path inside the container and runs in the current folder. Output paths are relative to the current folder when inside it, absolute otherwise. In v0.1.x paths had to be inside the current folder; every path that worked then still works.
+- Paths can be absolute or relative and sit anywhere; no `cd` needed. The command mounts the nearest `MQL4`/`MQL5` folder above each path (or the folder, or the file's folder) at the same path inside the container and runs in the current folder. Output paths are relative to the current folder when inside it, absolute otherwise.
 - Running with no arguments inside a subfolder such as `MQL5/Experts` now finds `MQL5/Include`.
 - A file named twice (directly and through its folder) compiles once.
 - `--help`, the README, the agent skill and its installation reference explain the tree layout, include resolution, mounts and first-run setup.

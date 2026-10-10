@@ -141,6 +141,91 @@ test_include_errors() {
     expect_output "the missing resource is named" "greeting\\.txt' not found"
 }
 
+test_reported_paths() {
+    log "paths in compiler messages, stale outputs"
+    fresh_workdir
+    printf '%s\n' '#include <Fixture/Missing.mqh>' 'void OnStart() {}' >"$WORK_ROOT/MQL5/Scripts/NoInclude.mq5"
+    # Redefining a class name breaks the standard header that declares it.
+    printf '%s\n' '#define CObject 1' '#include <Object.mqh>' 'void OnStart() {}' >"$WORK_ROOT/MQL5/Scripts/BreakStd.mq5"
+    compile MQL5/Scripts/NoInclude.mq5 MQL5/Scripts/BreakStd.mq5
+    expect_status "include errors" "$EXIT_COMPILE_ERRORS"
+    expect_output "a missing include reads as under the user's Include" "file 'MQL5/Include/Fixture/Missing\\.mqh' not found"
+    expect_output "an error in a standard header shows the header's real path" '^     /cache/uid-[0-9]+/wine/drive_c/.*/MQL5/Include/Object\.mqh\([0-9]+,[0-9]+\) : error'
+
+    # MetaEditor cannot delete a read-only .ex5; the compiler must.
+    cp "$WORK_ROOT/MQL5/Experts/Broken.mq5" "$WORK_ROOT/MQL5/Scripts/Broken.mq5"
+    printf 'stale\n' >"$WORK_ROOT/MQL5/Scripts/Broken.ex5"
+    chmod a-w "$WORK_ROOT/MQL5/Scripts/Broken.ex5"
+    compile MQL5/Scripts/Broken.mq5
+    expect_status "a failing file with an old output" "$EXIT_COMPILE_ERRORS"
+    if [[ -e "$WORK_ROOT/MQL5/Scripts/Broken.ex5" ]]; then
+        fail "a failed compile leaves no old .ex5 behind" "MQL5/Scripts/Broken.ex5 still exists"
+    else
+        pass "a failed compile leaves no old .ex5 behind"
+    fi
+
+    local odd="$WORK_ROOT/odd & spaced"
+    mkdir -p "$odd"
+    cp -r "$REPO_ROOT/tests/fixtures/MQL5" "$odd/"
+    wrapped "$WORK_ROOT" "odd & spaced/MQL5/Experts/Broken.mq5" "odd & spaced/MQL5/Experts/Hello.mq5"
+    expect_status "a folder with & and spaces" "$EXIT_COMPILE_ERRORS"
+    expect_output "& and spaces survive in error paths" "^     odd & spaced/MQL5/Experts/Broken\\.mq5\\(5,4\\) : error 256"
+    expect_output "& and spaces survive in output paths" '^OK   odd & spaced/MQL5/Experts/Hello\.mq5 -> odd & spaced/MQL5/Experts/Hello\.ex5'
+}
+
+test_nested_platform_folders() {
+    log "a .mq4 inside an MQL5 folder inside an MQL4 folder"
+    fresh_workdir
+    local nest="$WORK_ROOT/nest/MQL4"
+    mkdir -p "$nest/Projects/MQL5"
+    cp -r "$REPO_ROOT/tests/fixtures/MQL4/Include" "$nest/"
+    cp "$REPO_ROOT/tests/fixtures/MQL4/Experts/Hello.mq4" "$nest/Projects/MQL5/"
+    wrapped "$WORK_ROOT" nest/MQL4/Projects/MQL5/Hello.mq4
+    expect_status "the wrapper mounts the MQL4 folder a .mq4 includes from" "$EXIT_OK"
+}
+
+test_run_log() {
+    log "the run log"
+    local run_log
+    run_log="$TEST_CACHE/uid-$(id -u)/logs/last-run.log"
+    fresh_workdir
+    compile MQL5/Scripts/Say.mq5
+    expect_status "a short run" "$EXIT_OK"
+    if grep -q 'run complete total=1' "$run_log" && grep -q '^OK   MQL5/Scripts/Say\.mq5' "$run_log"; then
+        pass "the run log holds the results and the logs"
+    else
+        fail "the run log holds the results and the logs" "$run_log lacks them"
+    fi
+    compile does/not/exist.mq5
+    if grep -q 'no such file or folder' "$run_log"; then
+        pass "the run log keeps the last line of a run that fails at once"
+    else
+        fail "the run log keeps the last line of a run that fails at once" "$run_log lacks the error"
+    fi
+}
+
+test_parallel_runs() {
+    log "two runs at once"
+    fresh_workdir
+    local first_out second_out first_status=0 second_status=0
+    first_out="$(mktemp)"
+    second_out="$(mktemp)"
+    docker run --rm --user "$(id -u):$(id -g)" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
+        "$IMAGE" MQL5 >"$first_out" 2>&1 &
+    local first_pid=$!
+    docker run --rm --user "$(id -u):$(id -g)" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
+        "$IMAGE" MQL4 >"$second_out" 2>&1 || second_status=$?
+    wait "$first_pid" || first_status=$?
+    OUT="$(cat "$first_out" "$second_out")"
+    rm -f "$first_out" "$second_out"
+    STATUS="$first_status"
+    expect_status "the first of two parallel runs" "$EXIT_COMPILE_ERRORS"
+    STATUS="$second_status"
+    expect_status "the second of two parallel runs" "$EXIT_OK"
+    expect_output "one parallel run waits for the other" 'waiting for it to finish'
+    expect_output "both parallel runs finish" 'run complete total=5 compiled=5 failed=0'
+}
+
 test_wrapper() {
     log "the wrapper, from other folders"
     fresh_workdir
@@ -157,6 +242,9 @@ test_wrapper() {
     expect_status "a loose file through the wrapper" "$EXIT_OK"
     wrapped "$REPO_ROOT" does/not/exist.mq5
     expect_status "a path that does not exist, through the wrapper" "$EXIT_USAGE"
+    wrapped /
+    expect_status "no path from /" "$EXIT_USAGE"
+    expect_output "the wrapper refuses to mount /" 'refusing to mount /'
 }
 
 test_usage() {
@@ -177,7 +265,11 @@ main() {
     test_whole_tree
     test_selection
     test_include_errors
+    test_reported_paths
+    test_nested_platform_folders
     test_wrapper
+    test_run_log
+    test_parallel_runs
     test_usage
     rm -rf "$WORK_ROOT"
     printf '\n%d passed, %d failed\n' "$passed" "$failed"

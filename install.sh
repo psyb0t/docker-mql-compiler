@@ -10,7 +10,8 @@
 #   --user       install to ~/.local/bin (the default when not root)
 #   --system     install to /usr/local/bin (the default as root)
 #   --rolling    pin :latest instead of the newest release tag
-#   --uninstall  remove the command (the toolchain volume is kept)
+#   --uninstall  remove the command and its pinned image (the toolchain
+#                volume is kept)
 #
 # MQL_COMPILER_ENV=dev installs the command from this checkout and pins the
 # locally built :dev image (what `make install` does).
@@ -153,15 +154,35 @@ drop_previous_image() {
     warn "kept the previous image $previous (still in use)"
 }
 
+# Uninstalling removes the image the command was pinned to, except the local
+# :dev build, which belongs to the checkout rather than the install.
+drop_pinned_image() {
+    local image="$1"
+    [[ -n "$image" && "$image" != "$DEVELOPMENT_IMAGE" ]] || return 0
+    if ! command -v docker >/dev/null 2>&1; then
+        warn "docker is not installed, so the image $image was not removed"
+        return
+    fi
+    # "No such image" is fine here: the image may already be gone.
+    if docker image rm "$image" >/dev/null 2>&1; then
+        say "removed the image $image"
+        return
+    fi
+    warn "kept the image $image (in use, or already gone)"
+}
+
 uninstall() {
     ensure_managed
     if [[ ! -e "$INSTALL_PATH" ]]; then
         say "nothing installed at $INSTALL_PATH"
         return
     fi
+    local image
+    image="$(installed_image)"
     rm -f "$INSTALL_PATH"
     say "removed $INSTALL_PATH"
-    printf '\nThe toolchain volume is kept. To free its disk space too:\n\n  docker volume rm %s\n\n' "$CACHE_VOLUME"
+    drop_pinned_image "$image"
+    printf '\nThe toolchain volume is kept, since other users on this machine may share it. To free its disk space too:\n\n  docker volume rm %s\n\n' "$CACHE_VOLUME"
 }
 
 main() {
