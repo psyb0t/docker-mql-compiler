@@ -2,7 +2,7 @@
 # mql-compiler: compile MQL4 (.mq4) and MQL5 (.mq5) sources with MetaEditor
 # under Wine.
 #
-#   mql-compiler [--setup] [--help] [FILE or FOLDER ...]
+#   mql-compiler [OPTIONS] [FILE or FOLDER ...]
 #
 # Every argument is a file to compile or a folder to search (recursively) for
 # .mq4 and .mq5 files; no argument means the current folder. Relative paths
@@ -13,13 +13,13 @@
 #
 # Includes: MetaEditor reads `#include <...>` from exactly one folder,
 # <root>/Include. For each compile the root is a merged folder: the
-# terminal's standard library (Trade/Trade.mqh, stdlib.mqh, ...) with the
-# Include folder of the nearest enclosing MQL4/MQL5 folder laid over it, so
-# both are found and a file of yours replaces the standard one of the same
-# name. The merged root also links that folder's other subfolders, so
-# #resource paths such as "\\Indicators\\X.ex5" resolve. A source outside any
-# MQL4/MQL5 folder gets the standard library alone. `#include "..."` resolves
-# next to the source as usual.
+# terminal's standard library (Trade/Trade.mqh, stdlib.mqh, ...), then every
+# -I folder, then the Include folder of the nearest enclosing MQL4/MQL5
+# folder, each laid over the one before, so all are found and the later one
+# wins on a clash. The merged root also links that MQL4/MQL5 folder's other
+# subfolders, so #resource paths such as "\\Indicators\\X.ex5" resolve. A
+# source outside any MQL4/MQL5 folder gets the standard library and the -I
+# folders. `#include "..."` resolves next to the source as usual.
 #
 # The MetaQuotes toolchain is not in the image. The first run downloads the
 # RoboForex MT4 and MT5 installers (or MQL_COMPILER_MT4_URL / _MT5_URL),
@@ -28,11 +28,15 @@
 # /cache/uid-<UID>; keep /cache on a volume and later runs skip straight to
 # compiling.
 #
-# Exit status: 0 every file compiled, 1 at least one has compile errors,
-# 2 bad usage or a toolchain that could not be set up.
+# Output: by default one JSON object per line on stdout (a "file" record per
+# source, then a "summary"; an "error" record for a usage or setup failure).
+# --text prints the human OK/FAIL lines instead, --format gnu prints
+# path:line:column: messages for editors. JSON log lines go to stderr. Both
+# streams are also written to /cache/uid-<UID>/logs/last-run.log.
 #
-# Compile results go to stdout; JSON log lines go to stderr. Both are also
-# written to /cache/uid-<UID>/logs/last-run.log.
+# Exit status: 0 every file compiled, 1 at least one failed (compile errors,
+# or warnings with --werror), 2 bad usage or a toolchain that could not be
+# set up.
 set -euo pipefail
 trap 'printf "{\"level\":\"ERROR\",\"file\":\"%s\",\"line\":%d,\"msg\":\"command failed exit=%d\"}\n" "${BASH_SOURCE[0]##*/}" "$LINENO" "$?" >&2' ERR
 
@@ -50,6 +54,9 @@ readonly RUN_LOCK_FILE="$CACHE_ROOT/.run.lock"
 export HOME="$CACHE_ROOT/home"
 export WINEPREFIX="$CACHE_ROOT/wine"
 readonly DRIVE_C="$WINEPREFIX/drive_c"
+# --update moves the old prefix here and puts it back if the reinstall fails.
+readonly PREVIOUS_WINEPREFIX="$CACHE_ROOT/wine.previous"
+readonly IMAGE_VERSION_FILE="/usr/local/share/mql-compiler-version"
 readonly MT4_INSTALLER_URL="${MQL_COMPILER_MT4_URL:-https://download.mql5.com/cdn/web/22607/mt4/roboforexltd4setup.exe}"
 readonly MT5_INSTALLER_URL="${MQL_COMPILER_MT5_URL:-https://download.mql5.com/cdn/web/22607/mt5/roboforexltd5setup.exe}"
 readonly MT4_METAEDITOR="metaeditor.exe"
@@ -74,9 +81,28 @@ readonly CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 readonly XVFB_DISPLAY="${DISPLAY:-:99}"
 readonly DOWNLOAD_RETRIES=3
 readonly DOWNLOAD_RETRY_DELAY_SECONDS=5
+# The source files whose changes start another pass in --watch mode.
+readonly WATCHED_FILES='\.(mq4|mq5|mqh)$'
+readonly FORMAT_JSON="json"
+readonly FORMAT_TEXT="text"
+readonly FORMAT_GNU="gnu"
+readonly STATUS_OK="ok"
+readonly STATUS_FAILED="failed"
+readonly NO_RESULT="MetaEditor wrote no result"
 readonly EXIT_OK=0
 readonly EXIT_COMPILE_ERRORS=1
 readonly EXIT_USAGE=2
+# The exit status of a run stopped by SIGINT or SIGTERM, as a shell reports it.
+readonly EXIT_INTERRUPTED=130
+
+# fd 7 is the real stdout (through the log tee once logging starts). die
+# writes its error record there, so it reaches the caller even from inside a
+# command substitution.
+exec 7>&1
+
+OUTPUT_FORMAT="$FORMAT_JSON"
+WERROR=false
+EXTRA_INCLUDES=()
 
 log() {
     local level="$1"
@@ -93,16 +119,35 @@ log() {
 
 die() {
     log ERROR "$*"
+    if [[ "$OUTPUT_FORMAT" == "$FORMAT_JSON" ]]; then
+        jq -nc --arg message "$*" '{type: "error", message: $message}' >&7
+    fi
     exit "$EXIT_USAGE"
 }
 
 usage() {
     cat <<'EOF'
-Usage: mql-compiler [--setup | -h | --help] [FILE or FOLDER ...]
+Usage: mql-compiler [OPTIONS] [FILE or FOLDER ...]
 
   (no arguments)  compile every .mq4 and .mq5 under the current folder
   a file          compile that file (expert, indicator, script or library)
   a folder        compile every .mq4 and .mq5 inside it, recursively
+
+Options:
+  -I, --include DIR  lay DIR over the standard Include folder, so
+                     #include <X/y.mqh> also finds DIR/X/y.mqh (repeatable)
+  --werror           count a file with warnings as failed
+  --watch            compile, then compile again whenever a .mq4, .mq5 or
+                     .mqh under the given paths changes, until stopped
+  --text             print OK/FAIL lines for people instead of JSON
+  --format FORMAT    json (the default), text, or gnu (path:line:column:
+                     lines that editors parse)
+  --setup            only install the MetaQuotes toolchain and unpack its
+                     standard library
+  --update           reinstall the toolchain with the newest MT4 and MT5
+                     builds (keeps the old one if the reinstall fails)
+  --version          print the image version and the MetaEditor builds
+  -h, --help         show this help
 
 Paths may be relative or absolute. Arguments are taken in the order given,
 each folder's files sorted by path, a file named twice only once. Files
@@ -113,21 +158,19 @@ The extension picks the compiler: .mq4 goes to MT4's MetaEditor, .mq5 to
 MT5's. Each .ex4/.ex5 lands next to its source; the old one is deleted
 before the file compiles, so an output after the run is from this run.
 
-#include <...> finds both the MetaQuotes standard library and the Include
-folder of the nearest folder above the source named MQL4 (for a .mq4) or
-MQL5 (for a .mq5); a file of yours replaces the standard one with the same
-name. #resource "\\Files\\..." starts at that MQL4/MQL5 folder. #include
-"..." resolves next to the source. A source outside any MQL4/MQL5 folder
-gets the standard library only.
+#include <...> finds the MetaQuotes standard library, the -I folders, and
+the Include folder of the nearest folder above the source named MQL4 (for
+a .mq4) or MQL5 (for a .mq5), each overriding the one before. #resource
+"\\Files\\..." starts at that MQL4/MQL5 folder. #include "..." resolves next
+to the source. A source outside any MQL4/MQL5 folder gets the standard
+library and the -I folders only.
 
-Results go to stdout, JSON logs to stderr, and both to
+stdout carries the results: by default one JSON object per line, a "file"
+record per source and a "summary" at the end, or an "error" record when the
+run cannot start. stderr carries JSON log lines. Both also go to
 /cache/uid-<UID>/logs/last-run.log in the cache volume.
 
-  --setup     only download and install the MetaQuotes toolchain and
-              unpack its standard library
-  -h, --help  show this help
-
-Exit status: 0 all compiled, 1 compile errors, 2 bad path or option,
+Exit status: 0 all compiled, 1 at least one failed, 2 bad path or option,
 nothing to compile, or setup failure.
 EOF
 }
@@ -138,6 +181,7 @@ XVFB_PID=""
 STAGING_DIR=""
 TEE_STDOUT_PID=""
 TEE_STDERR_PID=""
+WATCHER_PID=""
 
 start_display() {
     # Xvfb's own chatter is noise in a compile log; failures surface when
@@ -153,8 +197,11 @@ keep_wineserver() {
 }
 
 cleanup() {
-    # Best effort on the way out: a wineserver or Xvfb that is already gone
-    # must not turn a finished run into a failure.
+    # Best effort on the way out: a watcher, wineserver or Xvfb that is
+    # already gone must not turn a finished run into a failure.
+    if [[ -n "$WATCHER_PID" ]]; then
+        kill "$WATCHER_PID" >/dev/null 2>&1 || true
+    fi
     wineserver -k >/dev/null 2>&1 || true
     if [[ -n "$XVFB_PID" ]]; then
         kill "$XVFB_PID" >/dev/null 2>&1 || true
@@ -169,13 +216,14 @@ cleanup() {
 # whatever they had not written yet: close their input and wait for them.
 finish() {
     cleanup
-    exec >&- 2>&-
+    exec >&- 2>&- 7>&-
     # Nothing is left to report a failure to; the exit status is the script's.
     wait "$TEE_STDOUT_PID" "$TEE_STDERR_PID" || true
 }
 
 # Two runs share one Wine prefix and one log file, so they take turns. The
-# lock lives on fd 8 until the container exits.
+# lock lives on fd 8 until the container exits; --watch lets go of it while
+# it waits for changes.
 acquire_run_lock() {
     exec 8>"$RUN_LOCK_FILE"
     if flock -n 8; then
@@ -190,6 +238,7 @@ start_logging() {
     TEE_STDOUT_PID=$!
     exec 2> >(tee -a "$LOG_FILE" >&2)
     TEE_STDERR_PID=$!
+    exec 7>&1
     trap finish EXIT
 }
 
@@ -234,6 +283,41 @@ stdlib_root() {
     local editor
     editor="$(find_metaeditor "$1")"
     printf '%s/%s\n' "$(dirname "$editor")" "$(mql_folder "$1")"
+}
+
+# A MetaEditor's FileVersion (such as 5.0.0.6249), read from the UTF-16
+# version resource in the executable; nothing when it is not installed.
+metaeditor_build() {
+    local editor
+    editor="$(find_metaeditor "$1")"
+    [[ -n "$editor" ]] || return 0
+    # grep finds nothing in a damaged executable; the build is then unknown.
+    LC_ALL=C grep -aoP 'F\x00i\x00l\x00e\x00V\x00e\x00r\x00s\x00i\x00o\x00n\x00(\x00)+\K([0-9.]\x00)+' "$editor" |
+        head -n 1 | tr -d '\000' || true
+}
+
+image_version() {
+    cat "$IMAGE_VERSION_FILE"
+}
+
+print_version() {
+    local version mt4_build mt5_build
+    version="$(image_version)"
+    mt4_build="$(metaeditor_build mt4)"
+    mt5_build="$(metaeditor_build mt5)"
+    if [[ "$OUTPUT_FORMAT" == "$FORMAT_JSON" ]]; then
+        jq -nc \
+            --arg version "$version" \
+            --arg mt4 "$mt4_build" \
+            --arg mt5 "$mt5_build" \
+            '{type: "version", version: $version,
+              mt4_metaeditor: ($mt4 | if . == "" then null else . end),
+              mt5_metaeditor: ($mt5 | if . == "" then null else . end)}'
+        return
+    fi
+    printf 'mql-compiler %s\n' "$version"
+    printf 'MT4 MetaEditor %s\n' "${mt4_build:-not installed}"
+    printf 'MT5 MetaEditor %s\n' "${mt5_build:-not installed}"
 }
 
 # The full check, revocation lists included. Prints osslsigncode's report.
@@ -301,7 +385,7 @@ install_platform() {
         log ERROR "install finished without a MetaEditor platform=$platform"
         return 1
     fi
-    log INFO "platform ready platform=$platform"
+    log INFO "platform ready platform=$platform build=$(metaeditor_build "$platform")"
 }
 
 # The installer leaves the standard library packed inside the terminal; the
@@ -331,7 +415,9 @@ unpack_stdlib() {
     log INFO "standard library ready platform=$platform path=$root"
 }
 
-ensure_toolchain() {
+# Installs whatever is missing. Returns non-zero instead of exiting, so
+# --update can put the previous toolchain back.
+install_toolchain() {
     mkdir -p "$HOME" "$INSTALLER_DIR"
     if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
         log INFO "creating the Wine prefix path=$WINEPREFIX"
@@ -340,10 +426,38 @@ ensure_toolchain() {
         wineboot --init >/dev/null 2>&1
         wineserver -w
     fi
-    [[ -n "$(find_metaeditor mt5)" ]] || install_platform mt5 "$MT5_INSTALLER_URL" || die "MT5 setup failed"
-    [[ -n "$(find_metaeditor mt4)" ]] || install_platform mt4 "$MT4_INSTALLER_URL" || die "MT4 setup failed"
-    unpack_stdlib mt5 || die "MT5 standard library setup failed"
-    unpack_stdlib mt4 || die "MT4 standard library setup failed"
+    [[ -n "$(find_metaeditor mt5)" ]] || install_platform mt5 "$MT5_INSTALLER_URL" || return 1
+    [[ -n "$(find_metaeditor mt4)" ]] || install_platform mt4 "$MT4_INSTALLER_URL" || return 1
+    unpack_stdlib mt5 || return 1
+    unpack_stdlib mt4 || return 1
+}
+
+ensure_toolchain() {
+    install_toolchain || die "toolchain setup failed (see the log lines above)"
+}
+
+# A fresh install with the newest installers. The old prefix stays aside
+# until the new one works, and comes back if it does not.
+update_toolchain() {
+    rm -rf "$PREVIOUS_WINEPREFIX"
+    if [[ -d "$WINEPREFIX" ]]; then
+        mv "$WINEPREFIX" "$PREVIOUS_WINEPREFIX"
+    fi
+    rm -f "$INSTALLER_DIR"/*.exe
+    log INFO "reinstalling the toolchain with the newest installers"
+    if install_toolchain; then
+        rm -rf "$PREVIOUS_WINEPREFIX"
+        log INFO "toolchain updated mt4_build=$(metaeditor_build mt4) mt5_build=$(metaeditor_build mt5)"
+        return
+    fi
+    # The half-built prefix may still have a wineserver; stop it first.
+    wineserver -k >/dev/null 2>&1 || true
+    rm -rf "$WINEPREFIX"
+    if [[ -d "$PREVIOUS_WINEPREFIX" ]]; then
+        mv "$PREVIOUS_WINEPREFIX" "$WINEPREFIX"
+        log WARN "update failed, kept the previous toolchain reason=update_failed"
+    fi
+    die "toolchain update failed (see the log lines above)"
 }
 
 # ---------------------------------------------------------------- include ---
@@ -364,24 +478,28 @@ user_mql_root() {
 
 # The /inc root for one compile, left in MERGED_ROOT. MetaEditor reads <...>
 # includes from exactly one <root>/Include, so this builds a folder holding
-# both: links to the terminal's standard Include with links to the user's
-# Include laid over them (the user's file wins on a clash), plus links to the
-# user's other subfolders for #resource paths. It lives in the staging folder
-# because MetaEditor's /inc cannot take a path with spaces, and the terminal
-# sits under "Program Files". Built once per platform and user folder per run.
+# them all: links to the terminal's standard Include, then the -I folders,
+# then the user's Include, each laid over the one before (the later file wins
+# on a clash), plus links to the user's other subfolders for #resource paths.
+# It lives in the staging folder because MetaEditor's /inc cannot take a path
+# with spaces, and the terminal sits under "Program Files". Built once per
+# platform and user folder per pass.
 declare -A MERGED_ROOTS=()
 MERGED_ROOT=""
 
 build_merged_root() {
-    local platform="$1" user_root="$2" key entry name
+    local platform="$1" user_root="$2" key entry name include_dir
     key="$platform:$user_root"
     if [[ -n "${MERGED_ROOTS[$key]:-}" ]]; then
         MERGED_ROOT="${MERGED_ROOTS[$key]}"
         return
     fi
-    MERGED_ROOT="$STAGING_DIR/${#MERGED_ROOTS[@]}/$(mql_folder "$platform")"
+    MERGED_ROOT="$STAGING_DIR/roots/${#MERGED_ROOTS[@]}/$(mql_folder "$platform")"
     mkdir -p "$MERGED_ROOT"
     cp -rs "$(stdlib_root "$platform")/Include" "$MERGED_ROOT/Include"
+    for include_dir in ${EXTRA_INCLUDES[@]+"${EXTRA_INCLUDES[@]}"}; do
+        cp -rs --remove-destination "$include_dir/." "$MERGED_ROOT/Include/"
+    done
     MERGED_ROOTS[$key]="$MERGED_ROOT"
     [[ -n "$user_root" ]] || return 0
     for entry in "$user_root"/*; do
@@ -411,7 +529,7 @@ shown() {
 # source is compiled through a link in the staging folder to its MQL4/MQL5
 # folder (or, for a loose file, its own folder), so the path MetaEditor sees
 # has none, and "../" includes inside that folder still resolve. Sets
-# STAGED_SOURCE; one link per folder per run.
+# STAGED_SOURCE; one link per folder per pass.
 declare -A SOURCE_LINKS=()
 STAGED_SOURCE=""
 
@@ -478,8 +596,57 @@ read_log() {
     done
 }
 
+# MetaEditor's error and warning lines, "path(line,column) : error 256:
+# text", as a JSON array of message objects. Other log lines are dropped.
+parse_messages() {
+    jq -Rnc '[inputs
+        | capture("^(?<file>.*)\\((?<line>[0-9]+),(?<column>[0-9]+)\\) : (?<severity>error|warning) (?<code>[0-9]+): (?<text>.*)$")?
+        | {severity, file: (if .file == "" then null else .file end),
+           line: (.line | tonumber), column: (.column | tonumber),
+           code: (.code | tonumber), text}]'
+}
+
+# Prints one file's result in the chosen format. $record is the JSON "file"
+# record; text and gnu are rendered from it so all formats say the same.
+print_file_result() {
+    local record="$1"
+    case "$OUTPUT_FORMAT" in
+        "$FORMAT_JSON")
+            printf '%s\n' "$record"
+            ;;
+        "$FORMAT_TEXT")
+            jq -r '
+                def where: if .file == null then "" else .file end
+                    + (if .line == null then "" else "(\(.line),\(.column))" end);
+                (if .status == "ok" then "OK   \(.source) -> \(.output) (\(.warnings) warnings)"
+                 elif .errors == null then "FAIL \(.source): \(.messages[0].text)"
+                 else "FAIL \(.source) (\(.errors) errors, \(.warnings) warnings)" end),
+                (.messages[] | select(.code != null) | "     \(where) : \(.severity) \(.code): \(.text)"),
+                (.log // [] | .[] | "     \(.)")' <<<"$record"
+            ;;
+        "$FORMAT_GNU")
+            jq -r '.source as $source | .messages[]
+                | "\(.file // $source):\(.line // 0):\(.column // 0): \(.severity): \(.text)"
+                  + (if .code == null then "" else " [\(.code)]" end)' <<<"$record"
+            ;;
+    esac
+}
+
+print_summary() {
+    local total="$1" failed="$2"
+    log INFO "run complete total=$total compiled=$((total - failed)) failed=$failed"
+    [[ "$OUTPUT_FORMAT" == "$FORMAT_JSON" ]] || return 0
+    jq -nc \
+        --argjson total "$total" \
+        --argjson failed "$failed" \
+        --argjson werror "$WERROR" \
+        '{type: "summary", total: $total, compiled: ($total - $failed), failed: $failed, werror: $werror}'
+}
+
+# Compiles one source and prints its result. Returns non-zero when it failed.
 compile_one() {
-    local source="$1" platform user_root shown_root output editor log_file result errors warnings
+    local source="$1" platform user_root shown_root output editor log_file
+    local result errors warnings messages status record
     case "${source,,}" in
         *.mq4) platform=mt4 output="${source%.*}.ex4" ;;
         *.mq5) platform=mt5 output="${source%.*}.ex5" ;;
@@ -502,25 +669,44 @@ compile_one() {
         "/log:$(winepath -w "$log_file")" \
         "/inc:$(winepath -w "$MERGED_ROOT")" >/dev/null 2>&1 || true
 
-    result="$(read_log "$log_file" "$MERGED_ROOT" "$shown_root" | grep -E '^Result: ' | tail -n 1)" || result=""
+    local lines
+    lines="$(read_log "$log_file" "$MERGED_ROOT" "$shown_root")"
+    rm -f "$log_file"
+    result="$(grep -E '^Result: ' <<<"$lines" | tail -n 1)" || result=""
     if [[ -z "$result" ]]; then
-        printf 'FAIL %s: MetaEditor wrote no result\n' "$(shown "$source")"
-        read_log "$log_file" "$MERGED_ROOT" "$shown_root" | sed 's/^/     /'
-        rm -f "$log_file"
+        record="$(jq -nc \
+            --arg source "$(shown "$source")" \
+            --arg platform "$platform" \
+            --arg text "$NO_RESULT" \
+            --arg lines "$lines" \
+            '{type: "file", source: $source, platform: $platform, status: "failed",
+              output: null, errors: null, warnings: null,
+              messages: [{severity: "error", file: $source, line: null, column: null, code: null, text: $text}],
+              log: ($lines | split("\n") | map(select(. != "")))}')"
+        print_file_result "$record"
         return 1
     fi
     errors="$(sed -nE 's/^Result: ([0-9]+) error.*/\1/p' <<<"$result")"
     warnings="$(sed -nE 's/.* ([0-9]+) warning.*/\1/p' <<<"$result")"
+    messages="$(parse_messages <<<"$lines")"
 
-    if [[ "$errors" == "0" ]]; then
-        printf 'OK   %s -> %s (%s warnings)\n' "$(shown "$source")" "$(shown "$output")" "${warnings:-0}"
-    else
-        printf 'FAIL %s (%s errors, %s warnings)\n' "$(shown "$source")" "$errors" "${warnings:-0}"
+    status="$STATUS_OK"
+    if [[ "${errors:-1}" != "0" ]] || { [[ "$WERROR" == true ]] && [[ "${warnings:-0}" != "0" ]]; }; then
+        status="$STATUS_FAILED"
     fi
-    # A clean file has no error or warning lines, which grep reports as 1.
-    read_log "$log_file" "$MERGED_ROOT" "$shown_root" | grep -E ' : (error|warning) ' | sed 's/^/     /' || true
-    rm -f "$log_file"
-    [[ "$errors" == "0" ]]
+    record="$(jq -nc \
+        --arg source "$(shown "$source")" \
+        --arg platform "$platform" \
+        --arg status "$status" \
+        --arg output "$(shown "$output")" \
+        --argjson errors "${errors:-0}" \
+        --argjson warnings "${warnings:-0}" \
+        --argjson messages "$messages" \
+        '{type: "file", source: $source, platform: $platform, status: $status,
+          output: (if $errors == 0 then $output else null end),
+          errors: $errors, warnings: $warnings, messages: $messages}')"
+    print_file_result "$record"
+    [[ "$status" == "$STATUS_OK" ]]
 }
 
 collect_sources() {
@@ -540,23 +726,121 @@ collect_sources() {
     done
 }
 
+# Compiles everything the targets name, once. Returns the number of failed
+# files through FAILED_COUNT.
+FAILED_COUNT=0
+
+compile_pass() {
+    local listing source sources=()
+    # A command substitution, not <(...), so a bad path ends the run here.
+    # A file named twice (directly and through its folder) compiles once.
+    listing="$(collect_sources "$@" | awk '!seen[$0]++')"
+    [[ -n "$listing" ]] || die "no .mq4 or .mq5 files found in: $*"
+    mapfile -t sources <<<"$listing"
+    MERGED_ROOTS=()
+    SOURCE_LINKS=()
+    rm -rf "${STAGING_DIR:?}/roots" "$STAGING_DIR/sources"
+    FAILED_COUNT=0
+    for source in "${sources[@]}"; do
+        compile_one "$source" || FAILED_COUNT=$((FAILED_COUNT + 1))
+    done
+    print_summary "${#sources[@]}" "$FAILED_COUNT"
+}
+
+# The folders --watch listens to: each target folder, each target file's
+# folder, and the -I folders.
+watch_paths() {
+    local target
+    for target in "$@" ${EXTRA_INCLUDES[@]+"${EXTRA_INCLUDES[@]}"}; do
+        [[ "$target" == /* ]] || target="$PWD/$target"
+        if [[ -d "$target" ]]; then
+            printf '%s\n' "$target"
+            continue
+        fi
+        dirname "$target"
+    done | sort -u
+}
+
+# Compiles, then again after every change, until SIGINT or SIGTERM. The run
+# lock is released while waiting, so other runs can use the cache meanwhile.
+watch_loop() {
+    local paths=()
+    mapfile -t paths < <(watch_paths "$@")
+    while true; do
+        flock -u 8
+        log INFO "watching for changes paths=${paths[*]}"
+        # Runs in the background so the INT/TERM trap fires at once; the wait
+        # returns when a matching file is written, created, moved or deleted.
+        inotifywait -qq -r -e close_write,create,delete,move --include "$WATCHED_FILES" "${paths[@]}" &
+        WATCHER_PID=$!
+        # inotifywait exits non-zero when a watched folder disappears; the
+        # next pass reports a missing path itself.
+        wait "$WATCHER_PID" || true
+        WATCHER_PID=""
+        acquire_run_lock
+        log INFO "change detected, compiling again"
+        compile_pass "$@"
+    done
+}
+
 # ------------------------------------------------------------------- main ---
 
+# Checks a -I folder and returns it as an absolute path.
+include_folder() {
+    local dir="$1"
+    [[ "$dir" == /* ]] || dir="$PWD/$dir"
+    dir="$(realpath -ms "$dir")"
+    [[ -d "$dir" ]] || die "no such include folder: $(shown "$dir")"
+    printf '%s\n' "$dir"
+}
+
 main() {
-    local setup_only=false targets=()
+    local mode="compile" targets=() watch=false
     while (($#)); do
         case "$1" in
             -h | --help)
                 usage
                 exit "$EXIT_OK"
                 ;;
-            --setup) setup_only=true ;;
+            --setup) mode="setup" ;;
+            --update) mode="update" ;;
+            --version) mode="version" ;;
+            --watch) watch=true ;;
+            --werror) WERROR=true ;;
+            --text) OUTPUT_FORMAT="$FORMAT_TEXT" ;;
+            --format | --format=*)
+                local format="${1#--format}"
+                format="${format#=}"
+                if [[ -z "$format" ]]; then
+                    (($# >= 2)) || die "--format needs a value: json, text or gnu"
+                    shift
+                    format="$1"
+                fi
+                case "$format" in
+                    "$FORMAT_JSON" | "$FORMAT_TEXT" | "$FORMAT_GNU") OUTPUT_FORMAT="$format" ;;
+                    *) die "unknown format: $format (json, text or gnu)" ;;
+                esac
+                ;;
+            -I | --include)
+                (($# >= 2)) || die "$1 needs a folder"
+                shift
+                EXTRA_INCLUDES+=("$(include_folder "$1")")
+                ;;
+            -I* | --include=*)
+                local value="${1#--include=}"
+                EXTRA_INCLUDES+=("$(include_folder "${value#-I}")")
+                ;;
             -*) die "unknown option: $1 (see --help)" ;;
             *) targets+=("$1") ;;
         esac
         shift
     done
     ((${#targets[@]})) || targets=(".")
+
+    if [[ "$mode" == "version" ]]; then
+        print_version
+        exit "$EXIT_OK"
+    fi
 
     # Wine refuses a prefix owned by another UID, so say so before trying.
     if [[ -e "$CACHE_ROOT" && ! -O "$CACHE_ROOT" ]]; then
@@ -565,31 +849,40 @@ main() {
     mkdir -p "$LOG_DIR"
     acquire_run_lock
     start_logging
+    log INFO "mql-compiler version=$(image_version) mode=$mode format=$OUTPUT_FORMAT"
 
-    local sources=() listing
-    if [[ "$setup_only" == false ]]; then
-        # A command substitution, not <(...), so a bad path ends the run here.
-        # A file named twice (directly and through its folder) compiles once.
-        listing="$(collect_sources "${targets[@]}" | awk '!seen[$0]++')"
-        [[ -n "$listing" ]] || die "no .mq4 or .mq5 files found in: ${targets[*]}"
-        mapfile -t sources <<<"$listing"
+    # Stopping the run (docker stop, Ctrl-C through docker run --init) still
+    # goes through finish, so the log is complete and the staging folder gone.
+    trap 'exit "$EXIT_INTERRUPTED"' INT TERM
+
+    if [[ "$mode" == "compile" ]]; then
+        # Bad paths and empty folders fail now, before a first-run install.
+        [[ -n "$(collect_sources "${targets[@]}")" ]] || die "no .mq4 or .mq5 files found in: ${targets[*]}"
     fi
 
     STAGING_DIR="$(mktemp -d /tmp/mql-compiler.XXXXXX)"
     start_display
-    ensure_toolchain
-    if [[ "$setup_only" == true ]]; then
-        log INFO "toolchain ready path=$CACHE_ROOT"
-        exit "$EXIT_OK"
-    fi
+    case "$mode" in
+        setup)
+            ensure_toolchain
+            log INFO "toolchain ready path=$CACHE_ROOT"
+            print_version
+            exit "$EXIT_OK"
+            ;;
+        update)
+            update_toolchain
+            print_version
+            exit "$EXIT_OK"
+            ;;
+    esac
 
+    ensure_toolchain
     keep_wineserver
-    local source failed=0
-    for source in "${sources[@]}"; do
-        compile_one "$source" || failed=$((failed + 1))
-    done
-    log INFO "run complete total=${#sources[@]} compiled=$((${#sources[@]} - failed)) failed=$failed"
-    ((failed == 0)) || exit "$EXIT_COMPILE_ERRORS"
+    compile_pass "${targets[@]}"
+    if [[ "$watch" == true ]]; then
+        watch_loop "${targets[@]}"
+    fi
+    ((FAILED_COUNT == 0)) || exit "$EXIT_COMPILE_ERRORS"
 }
 
 main "$@"

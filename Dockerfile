@@ -15,13 +15,14 @@ LABEL org.opencontainers.image.title="mql-compiler" \
 # MT4's MetaEditor is a 32-bit program, so Wine needs its i386 half too.
 # xvfb gives the installers and MetaEditor a display they never show.
 # osslsigncode checks the installers' Authenticode signature before they run;
-# jq writes the JSON log lines.
+# jq writes the JSON results and log lines; inotify-tools drives --watch.
 # hadolint ignore=DL3008
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        inotify-tools \
         jq \
         osslsigncode \
         procps \
@@ -45,7 +46,9 @@ ENV WINEDEBUG=-all \
     WINEDLLOVERRIDES="mscoree,mshtml=" \
     DISPLAY=:99
 
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/mql-compiler
+COPY --chown=root:root --chmod=0755 entrypoint.sh /usr/local/bin/mql-compiler
+# --version reports this.
+COPY --chown=root:root --chmod=0644 VERSION /usr/local/share/mql-compiler-version
 
 USER 1000:1000
 WORKDIR /src

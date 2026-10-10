@@ -5,7 +5,8 @@ Prefix: DOC.
 ## Docs move with the code
 
 - **DOC1:** A change that alters behaviour a user or agent can see updates the docs in the same change. The owners:
-  - what a run does, paths, includes, output, exit codes, environment variables: `README.md`;
+  - what a run does, paths, includes, options, the JSON output, exit codes, environment variables, the GitHub Action's inputs and outputs: `README.md`;
+  - the GitHub Action's own metadata: the `description` fields in `action.yml`;
   - the same facts for agents: `.agents/skills/mql-compiler/SKILL.md`;
   - installing, upgrading, the first run and troubleshooting: `.agents/skills/mql-compiler/references/installation.md`;
   - the in-image summary: `usage()` in `entrypoint.sh` (`--help`) and the header comments of `entrypoint.sh` and `wrapper.sh`;

@@ -1,0 +1,73 @@
+name: MQL compiler
+description: Compile MQL4 and MQL5 sources with MetaQuotes' MetaEditor under Wine and mark compile errors on the source lines.
+author: psyb0t
+branding:
+  icon: cpu
+  color: blue
+
+inputs:
+  paths:
+    description: Files or folders to compile, one per line. Folders are searched recursively for .mq4 and .mq5.
+    required: false
+    default: "."
+  include:
+    description: Extra include folders (the -I option), one per line.
+    required: false
+    default: ""
+  werror:
+    description: Count a file with warnings as failed.
+    required: false
+    default: "false"
+  image:
+    description: Image to run. By default the release matching this action's ref (psyb0t/mql-compiler:vX.Y.Z), or :latest for a branch.
+    required: false
+    default: ""
+  cache:
+    description: Keep the installed MT4/MT5 toolchain (about 2 GB) in the Actions cache, so later runs skip the 90-second install.
+    required: false
+    default: "true"
+  cache-dir:
+    description: Folder that holds the toolchain. Defaults to a folder under RUNNER_TEMP.
+    required: false
+    default: ""
+
+outputs:
+  results:
+    description: Path of the JSON Lines results file (one "file" record per source, then a "summary").
+    value: ${{ steps.compile.outputs.results }}
+  total:
+    description: Number of sources compiled.
+    value: ${{ steps.compile.outputs.total }}
+  compiled:
+    description: Number of sources that compiled.
+    value: ${{ steps.compile.outputs.compiled }}
+  failed:
+    description: Number of sources that failed.
+    value: ${{ steps.compile.outputs.failed }}
+
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      env:
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_CACHE_DIR: ${{ inputs.cache-dir }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh" prepare
+
+    - if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.prepare.outputs.cache-dir }}
+        key: ${{ steps.prepare.outputs.cache-key }}
+
+    - id: compile
+      shell: bash
+      env:
+        ACTION_IMAGE: ${{ steps.prepare.outputs.image }}
+        ACTION_CACHE_DIR: ${{ steps.prepare.outputs.cache-dir }}
+        INPUT_PATHS: ${{ inputs.paths }}
+        INPUT_INCLUDE: ${{ inputs.include }}
+        INPUT_WERROR: ${{ inputs.werror }}
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh" compile

@@ -1,4 +1,6 @@
-# The image needs only entrypoint.sh (see Dockerfile); keep everything else,
-# above all the multi-GB test cache, out of the build context.
+# The image needs only entrypoint.sh and VERSION (see Dockerfile); keep
+# everything else, above all the multi-GB test cache, out of the build context.
 *
 !entrypoint.sh
+!VERSION
+.telemetry/

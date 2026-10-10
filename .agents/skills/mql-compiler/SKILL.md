@@ -24,25 +24,30 @@ It lands in `~/.local/bin`; if that is not on `PATH`, the installer prints the l
 ## Compile
 
 ```bash
-mql-compiler [FILE or FOLDER ...]
+mql-compiler [OPTIONS] [FILE or FOLDER ...]
 
-mql-compiler                                # every .mq4 and .mq5 under the current folder
-mql-compiler /abs/path/MQL5/Experts/Foo.mq5 # one file, from any folder
-mql-compiler MQL5/Indicators MQL4           # folders, searched recursively
+mql-compiler 2>/dev/null                               # every .mq4 and .mq5 under the current folder
+mql-compiler /abs/path/MQL5/Experts/Foo.mq5 2>/dev/null # one file, from any folder
+mql-compiler MQL5/Indicators MQL4 2>/dev/null           # folders, searched recursively
+mql-compiler -I /path/to/shared/lib MQL5 2>/dev/null    # a shared include folder outside the tree
+mql-compiler --werror MQL5 2>/dev/null                  # warnings count as failures
 ```
+
+Options: `-I DIR` / `--include DIR` (extra include folder, repeatable), `--werror`, `--watch` (recompile on change until stopped; do not use it in an agent run, it never exits on its own), `--text` and `--format json|text|gnu` (output format; leave the JSON default), `--setup` (install only), `--update` (reinstall MT4/MT5 with the newest builds), `--version` (image version and MetaEditor builds), `-h`/`--help`.
 
 - Arguments are files or folders, relative or absolute, anywhere on the machine. No argument means the current folder. No `cd` is needed. A path that does not exist stops the run with exit `2` before anything compiles.
 - A folder is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order given; a file named twice compiles once, in its first position. `.mqh` and other files are skipped in folders and rejected (exit `2`) when named directly. A run that finds no sources exits `2`.
 - One container runs the whole list, one file at a time, never in parallel. A failing file does not stop the run. Pass everything to one call: two runs at the same time take turns (the second logs that it is waiting), so splitting a job only makes it slower.
 - Paths with spaces work; the messages still show the real paths.
 - The extension alone picks the compiler: `.mq4` goes to MT4's MetaEditor, `.mq5` to MT5's. The folder only decides the includes: a `.mq4` uses the nearest folder named `MQL4` (any case) above it, a `.mq5` the nearest `MQL5`. Experts, indicators, scripts and libraries all compile the same way.
-- Each `.ex4`/`.ex5` is written next to its source with the same base name, owned by the caller. The old one is deleted right before the file compiles, so after a run an `.ex4`/`.ex5` exists only if this run produced it. Still report success from the file's `OK` line.
+- Each `.ex4`/`.ex5` is written next to its source with the same base name, owned by the caller. The old one is deleted right before the file compiles, so after a run an `.ex4`/`.ex5` exists only if this run produced it. Still report success from the file's `"status": "ok"`.
 - The container sees only the mounted folders (each source's `MQL4`/`MQL5` folder, or a loose file's own folder). Includes, resources and symlinks that point outside them are missing files inside the container.
 - The first run downloads and installs MT4 and MT5 into the `mql-compiler-cache` Docker volume and unpacks their standard libraries, about a minute and a half. Allow for it in timeouts; later runs take seconds. `mql-compiler --setup` does only this.
 
 ## How includes resolve
 
-- `#include <...>` searches one merged folder built for the run: the matching platform's MetaQuotes standard library (`<Trade/Trade.mqh>`, `<Arrays/ArrayObj.mqh>`, `<stdlib.mqh>`, ...) with the `Include` folder of the nearest enclosing `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder laid over it. When both have the same path, the user's file wins.
+- `#include <...>` searches one merged folder built for the run: the matching platform's MetaQuotes standard library (`<Trade/Trade.mqh>`, `<Arrays/ArrayObj.mqh>`, `<stdlib.mqh>`, ...), then each `-I` folder, then the `Include` folder of the nearest enclosing `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder, each laid over the one before. When two have the same path, the later one wins, so the user's own `Include` always wins.
+- An `-I` folder stands in for `Include`: with `-I /libs` and `/libs/MyLib/x.mqh`, `#include <MyLib/x.mqh>` works.
 - `#resource "\\Files\\x.txt"` and other `\\`-rooted paths start at that same `MQL4`/`MQL5` folder.
 - `#include "..."` resolves next to the source.
 - A source outside any `MQL4`/`MQL5` folder gets the standard library only, and no `\\`-rooted resources.
@@ -53,26 +58,32 @@ So keep a terminal-style tree: sources under `MQL5/Experts`, `MQL5/Indicators`, 
 
 ## Read the result
 
-Results go to stdout, one line per file, followed by that file's compiler messages:
+stdout is JSON Lines, one object per line with a `type`. Parse it; do not scrape text.
 
-```text
-OK   MQL5/Experts/Foo.mq5 -> MQL5/Experts/Foo.ex5 (0 warnings)
-FAIL MQL5/Experts/Bar.mq5 (1 errors, 0 warnings)
-     MQL5/Experts/Bar.mq5(41,7) : error 256: undeclared identifier 'lots'
+```json
+{"type":"file","source":"MQL5/Experts/Foo.mq5","platform":"mt5","status":"ok","output":"MQL5/Experts/Foo.ex5","errors":0,"warnings":0,"messages":[]}
+{"type":"file","source":"MQL5/Experts/Bar.mq5","platform":"mt5","status":"failed","output":null,"errors":1,"warnings":0,"messages":[{"severity":"error","file":"MQL5/Experts/Bar.mq5","line":41,"column":7,"code":256,"text":"undeclared identifier 'lots'"}]}
+{"type":"summary","total":2,"compiled":1,"failed":1,"werror":false}
 ```
 
-Errors read `path(line,column) : error <code>: <message>`. Paths are relative to the current folder when inside it, absolute otherwise. Fix the source at that line and compile again. Progress and diagnostics go to stderr as JSON lines; `2>/dev/null` hides them. A copy of the last run (stdout and stderr) is in the cache volume: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log`.
+- `file` (one per source): `source`, `platform` (`mt4`/`mt5`), `status` (`ok`/`failed`), `output` (the `.ex4`/`.ex5`, or `null`), `errors` and `warnings` (counts, `null` when MetaEditor wrote no result), `messages` (each `{severity, file, line, column, code, text}`), and `log` (MetaEditor's raw lines) only when it wrote no result.
+- `summary` (last): `total`, `compiled`, `failed`, `werror`.
+- `error` (instead of the rest, when the run cannot start): `message`. A bad path, a bad option or a failed setup.
+- `version` (from `--version`, `--setup`, `--update`): `version`, `mt4_metaeditor`, `mt5_metaeditor`.
+
+Paths are relative to the current folder when inside it, absolute otherwise. Fix the source at each message's `file`, `line` and `column`, and compile again. Progress and diagnostics go to stderr as JSON log lines; `2>/dev/null` hides them. A copy of the last run (stdout and stderr) is in the cache volume: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log`.
 
 | Exit | Meaning |
 |---|---|
 | `0` | Every file compiled |
-| `1` | At least one file has compile errors, or MetaEditor wrote no result for it (see the `FAIL` lines) |
-| `2` | Bad path or option, no sources found, or the toolchain could not be set up (see stderr) |
-| `125` and other Docker codes | Docker itself failed: daemon down, image not pullable, a bad mount |
+| `1` | At least one file failed: compile errors, warnings under `--werror`, or MetaEditor wrote no result (see the `failed` records) |
+| `2` | Bad path or option, no sources found, or the toolchain could not be set up (see the `error` record) |
+| `125` and other Docker codes | Docker itself failed: daemon down, image not pullable, a bad mount (stdout may be empty) |
 
 ## Rules for agents
 
 - Use the `mql-compiler` command. Do not build your own `docker run` unless the user asks.
-- Report compile errors with their file, line and message. A file compiled when its line says `OK`, even if the run exits `1` because of another file. Claim the whole build succeeded only when the exit status is `0`.
+- Report compile errors with their file, line, column, code and text from the `messages`. A file compiled when its record says `"status": "ok"`, even if the run exits `1` because of another file. Claim the whole build succeeded only when the exit status is `0` and the summary shows `"failed": 0`.
+- Mention warnings to the user even when the build passes; they are in `messages` with `"severity": "warning"`.
 - `file '...' not found` on an `#include <...>` means the header is in neither the user's `Include` nor the standard library. Check the source sits under the right `MQL4`/`MQL5` folder before editing code.
 - `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` choose other installers, which only matters on a first run, so pair them with a fresh `MQL_COMPILER_VOLUME`. Remove a volume only when the user asks: it costs another full download, and `mql-compiler-cache` holds every user's toolchain on the machine.

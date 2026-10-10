@@ -5,18 +5,22 @@
 [![license](https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/badges/license.svg)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/psyb0t/mql-compiler?style=flat-square)](https://hub.docker.com/r/psyb0t/mql-compiler)
 
-Compile MQL4 and MQL5 on Linux without booting a goddamn Windows box. One command, and MetaQuotes' own MetaEditor wakes up inside a Wine container, chews through your `.mq4` and `.mq5` files, shits out `.ex4` and `.ex5` right next to them, and screams the compiler errors into your terminal like a proper CLI tool should.
+Compile MQL4 and MQL5 on Linux without booting a goddamn Windows box. One command, and MetaQuotes' own MetaEditor wakes up inside a Wine container, chews through your `.mq4` and `.mq5` files, shits out `.ex4` and `.ex5` right next to them, and hands back every error as JSON your agent can actually use. Humans get `--text`.
 
 No Windows. No MetaTrader window to babysit. No broker account. No clicking "Compile" in a GUI that looks like it escaped from 2009.
 
 ```console
-$ mql-compiler
+$ mql-compiler 2>/dev/null
+{"type":"file","source":"MQL4/Experts/Grid.mq4","platform":"mt4","status":"ok","output":"MQL4/Experts/Grid.ex4","errors":0,"warnings":0,"messages":[]}
+{"type":"file","source":"MQL5/Experts/Scalper.mq5","platform":"mt5","status":"failed","output":null,"errors":1,"warnings":0,"messages":[{"severity":"error","file":"MQL5/Experts/Scalper.mq5","line":41,"column":7,"code":256,"text":"undeclared identifier 'lots'"}]}
+{"type":"summary","total":2,"compiled":1,"failed":1,"werror":false}
+$ echo $?
+1
+
+$ mql-compiler --text 2>/dev/null
 OK   MQL4/Experts/Grid.mq4 -> MQL4/Experts/Grid.ex4 (0 warnings)
 FAIL MQL5/Experts/Scalper.mq5 (1 errors, 0 warnings)
      MQL5/Experts/Scalper.mq5(41,7) : error 256: undeclared identifier 'lots'
-OK   MQL5/Indicators/Bands.mq5 -> MQL5/Indicators/Bands.ex5 (2 warnings)
-$ echo $?
-1
 ```
 
 ## Contents
@@ -26,9 +30,11 @@ $ echo $?
 - [Using the damn thing](#using-the-damn-thing)
 - [How the sausage gets made](#how-the-sausage-gets-made)
 - [Environment variables](#environment-variables)
+- [GitHub Action](#github-action)
 - [Running the image by hand](#running-the-image-by-hand)
 - [Agent integrations](#agent-integrations)
 - [Development](#development)
+- [Recommended brokers](#recommended-brokers)
 - [License](#license)
 
 > [!WARNING]
@@ -37,7 +43,9 @@ $ echo $?
 ## What this fucker does
 
 - **Real MetaEditor, both flavours.** MT4's 32-bit `metaeditor.exe` for `.mq4`, MT5's `MetaEditor64.exe` for `.mq5`. The actual MetaQuotes compilers, not some reverse-engineered knockoff that chokes on half your includes.
-- **One command, CLI-shaped.** Point it at files or folders, get `OK`/`FAIL` per file, compiler errors with file, line and column, and an exit code your scripts and CI can trust: `0` clean, `1` compile errors, `2` you fucked up the arguments or the setup died.
+- **Built for agents.** Point it at files or folders and get one JSON record per file: status, output path, and every error and warning with file, line, column and code. No regex-scraping MetaEditor's log. Plus an exit code your scripts and CI can trust: `0` clean, `1` something failed, `2` you fucked up the arguments or the setup died. `--text` and `--format gnu` are there for meatbags and their editors.
+- **CI in four lines.** A GitHub Action compiles your EAs on every push and marks the errors right on the source lines in the PR.
+- **Dev loop.** `--watch` recompiles on save, `--werror` fails on warnings, `-I` pulls in a shared library from wherever it lives.
 - **Includes work like in the terminal.** `#include <Trade/Trade.mqh>` finds the MetaQuotes standard library, `#include <MyStuff/Thing.mqh>` finds your own `Include` folder, and if you hacked a standard header in your tree, your copy wins.
 - **Point it at anything, from anywhere.** Files, folders, relative paths, absolute paths, MT4 and MT5 mixed in one run. Experts, indicators, scripts, libraries, it doesn't give a shit what the program is. No `cd` dance.
 - **No MetaQuotes binaries in the image.** The first run downloads the MT4 and MT5 installers, refuses to run any that MetaQuotes' own certificate didn't sign, and caches the installed toolchain in a Docker volume. After that, a compile takes a few seconds.
@@ -62,15 +70,30 @@ Then go to a folder full of MQL sources and run `mql-compiler`. The first run sp
 ## Using the damn thing
 
 ```bash
-mql-compiler [FILE or FOLDER ...]
+mql-compiler [OPTIONS] [FILE or FOLDER ...]
 
 mql-compiler                                    # every .mq4 and .mq5 under the current folder
 mql-compiler ~/trading/MQL5/Experts             # one folder, recursively
 mql-compiler MQL5/Experts/Scalper.mq5           # just the one EA out of your hundred
 mql-compiler ~/a/MQL4/Experts/Grid.mq4 Foo.mq5  # files from all over the place, both platforms
+mql-compiler --text MQL5                        # OK/FAIL lines for humans
+mql-compiler --watch MQL5/Experts               # recompile on every save until Ctrl-C
+mql-compiler -I ~/libs/mql5 MQL5                # a shared library outside the tree
 mql-compiler --setup                            # just download and install the toolchain, compile nothing
 mql-compiler --help
 ```
+
+| Option | What it does |
+|---|---|
+| `-I DIR`, `--include DIR` | Lays `DIR` over the standard `Include`, so `#include <MyLib/x.mqh>` also finds `DIR/MyLib/x.mqh`. Repeat it for more folders. The folder gets mounted too. |
+| `--werror` | A file with warnings counts as failed (`status: "failed"`, exit `1`). |
+| `--watch` | Compiles, then compiles everything again whenever a `.mq4`, `.mq5` or `.mqh` under the given paths or `-I` folders changes. Runs until Ctrl-C. |
+| `--text` | `OK`/`FAIL` lines plus MetaEditor's own message lines, instead of JSON. |
+| `--format FORMAT` | `json` (the default), `text`, or `gnu`: `path:line:column: error: text [code]` lines that VS Code, vim and emacs jump to. |
+| `--setup` | Installs the toolchain and stops. Handy before a timed job. |
+| `--update` | Reinstalls MT4 and MT5 from the newest installers. The old toolchain stays put until the new one works. |
+| `--version` | The image version and the exact MetaEditor builds in your cache. |
+| `-h`, `--help` | The built-in help. |
 
 ### What happens when you run it
 
@@ -79,8 +102,38 @@ mql-compiler --help
 3. **The toolchain gets checked.** On the very first run this is where MT4 and MT5 get installed (about a minute and a half). After that it's a quick look at the cache.
 4. **Files compile one at a time, never in parallel,** in the order from step 2, MT4 and MT5 files mixed. **The extension alone picks the compiler:** `.mq4` goes to MT4's `metaeditor.exe`, `.mq5` to MT5's `MetaEditor64.exe`. The folder a file sits in doesn't change that. It only decides which `Include` the file sees: a `.mq4` looks for the nearest folder called `MQL4` above it, a `.mq5` for the nearest `MQL5` (any case, `mql5` works too). So a `.mq4` dumped inside `MQL5/Experts` still compiles with MT4, but it won't see `MQL5/Include`.
 5. **Results land next to the sources.** `Foo.mq5` gives `Foo.ex5` in the same folder, `Bar.mq4` gives `Bar.ex4`, owned by you, not root. The old `.ex4`/`.ex5` gets deleted right before each file compiles, so whatever sits there after the run came out of this run: no stale build that looks fresh, even when MetaEditor crashes. A failure doesn't stop the run; every file gets its turn.
-6. **You get the report.** On stdout, one `OK` or `FAIL` line per file, then that file's errors and warnings, as each file finishes. Paths read relative to your current folder when they're inside it, absolute when they aren't. Errors point at the real file: your header for your header, and for a standard one the header's path in the toolchain (`/cache/uid-<UID>/wine/drive_c/...`, inside the cache volume). Progress and logs go to stderr as JSON lines, so `mql-compiler 2>/dev/null` shows nothing but the results. A copy of the whole run, `--setup` and failed runs included, goes to `uid-<your UID>/logs/last-run.log` in the cache volume, replaced every run: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log` reads it.
-7. **The exit status sums it up:** `0` every file compiled, `1` at least one has compile errors (or MetaEditor choked and wrote no result), `2` bad path, bad option, nothing to compile, or the toolchain couldn't be installed. If Docker itself fails (daemon down, image can't be pulled), you get Docker's own code, usually `125`.
+6. **You get the report.** On stdout, one JSON record per file as each one finishes, then a summary (see [what comes out](#what-comes-out)). Paths read relative to your current folder when they're inside it, absolute when they aren't. Errors point at the real file: your header for your header, and for a standard one the header's path in the toolchain (`/cache/uid-<UID>/wine/drive_c/...`, inside the cache volume). Progress and logs go to stderr as JSON lines too, so `mql-compiler 2>/dev/null` shows nothing but the results. A copy of the whole run, `--setup` and failed runs included, goes to `uid-<your UID>/logs/last-run.log` in the cache volume, replaced every run: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log` reads it.
+7. **The exit status sums it up:** `0` every file compiled, `1` at least one failed (compile errors, warnings under `--werror`, or MetaEditor choked and wrote no result), `2` bad path, bad option, nothing to compile, or the toolchain couldn't be installed. If Docker itself fails (daemon down, image can't be pulled), you get Docker's own code, usually `125`. A `--watch` run stopped with Ctrl-C exits `130`.
+
+### What comes out
+
+stdout is [JSON Lines](https://jsonlines.org): one object per line, each with a `type`.
+
+- **`file`**, one per source:
+  - `source`: the path as given back to you;
+  - `platform`: `mt4` or `mt5`;
+  - `status`: `ok` or `failed`;
+  - `output`: the `.ex4`/`.ex5` path, or `null` when nothing was built;
+  - `errors`, `warnings`: MetaEditor's counts, `null` when it wrote no result;
+  - `messages`: every error and warning as `{severity, file, line, column, code, text}`;
+  - `log`: MetaEditor's raw lines, only when it wrote no result.
+- **`summary`**, last: `total`, `compiled`, `failed`, `werror`. `--watch` prints one after every pass.
+- **`error`**, instead of everything else when the run can't start (bad path, bad option, broken setup): `message`.
+- **`version`**, from `--version`, `--setup` and `--update`: `version`, `mt4_metaeditor`, `mt5_metaeditor`.
+
+`jq` makes short work of it: `mql-compiler 2>/dev/null | jq -r 'select(.status == "failed") | .source'` lists what broke.
+
+### Watching, warnings and shared libraries
+
+`--watch` holds the container open, compiles, then sits on inotify and runs another full pass whenever a source or header changes under the paths you gave it or an `-I` folder. Between passes it lets go of the cache lock, so a one-off `mql-compiler` in another terminal still gets a turn. Ctrl-C stops it cleanly.
+
+`--werror` turns a file with warnings into a failure, with its status and the exit code to match. The `.ex4`/`.ex5` still gets built; the flag only changes the verdict.
+
+`-I` is for code that doesn't live in your `MQL4`/`MQL5` tree: a shared library repo, a vendored framework. Point it at the folder that would sit inside `Include`, so `-I ~/libs/mql5` with `~/libs/mql5/MyLib/Money.mqh` makes `#include <MyLib/Money.mqh>` work. The layering is standard library first, then each `-I` in order, then your own `Include` on top.
+
+### Keeping MetaEditor current
+
+The cache keeps whatever MetaEditor build got installed first, forever. `mql-compiler --version` shows which builds you're on, and `mql-compiler --update` reinstalls both from the newest installers (about a minute and a half). If the reinstall fails, the old toolchain comes back as it was.
 
 Two runs at once take turns: they share one Wine install and one log file, so the second one logs that it's waiting and starts when the first is done. Handing everything to one run is faster.
 
@@ -110,8 +163,9 @@ The container only sees the mounted folder (the `MQL4`/`MQL5` one, or a loose fi
 MetaEditor reads `#include <...>` from exactly one `Include` folder. Your sources need two: the MetaQuotes standard library and your own headers. So the tool builds a throwaway folder that has both, once per platform and `MQL4`/`MQL5` folder in a run:
 
 1. Links to the matching terminal's standard `Include` (`Trade/`, `Arrays/`, `stdlib.mqh`, the whole lot): MT4's for a `.mq4`, MT5's for a `.mq5`.
-2. Links to the files in the `Include` of the nearest `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder above your source, laid on top. Same path in both? **Yours wins.** Edited `Trade/Trade.mqh` in your tree? Your version gets compiled.
-3. Links to the rest of that `MQL4`/`MQL5` folder (`Files`, `Images`, `Indicators`, ...), so `#resource "\\Files\\data.txt"` and friends resolve.
+2. Links to every `-I` folder's files, laid on top in the order you gave them.
+3. Links to the files in the `Include` of the nearest `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder above your source, laid on top of all that. Same path in two layers? **The later one wins, and yours is last.** Edited `Trade/Trade.mqh` in your tree? Your version gets compiled.
+4. Links to the rest of that `MQL4`/`MQL5` folder (`Files`, `Images`, `Indicators`, ...), so `#resource "\\Files\\data.txt"` and friends resolve.
 
 MetaEditor gets that folder as its include root. Nothing gets written into your folders or the terminal's, and the folder is gone when the run ends. `#include "..."` resolves next to the source, as always.
 
@@ -137,24 +191,48 @@ The `mql-compiler` command reads these:
 
 The installer URLs only matter while the toolchain is being installed. To use another broker's installers, point `MQL_COMPILER_VOLUME` at a new volume name for that first run and keep using it. `docker volume rm mql-compiler-cache` works too, but it throws away every user's toolchain on the box.
 
+## GitHub Action
+
+Compile on every push, fail the job on errors, and get each error marked on its source line in the PR:
+
+```yaml
+- uses: actions/checkout@v6
+- uses: psyb0t/docker-mql-compiler@v0.3.0
+  with:
+    paths: |
+      MQL5/Experts
+      MQL4/Indicators/Bands.mq4
+```
+
+| Input | Default | What it does |
+|---|---|---|
+| `paths` | `.` | Files or folders to compile, one per line |
+| `include` | none | Extra `-I` folders, one per line |
+| `werror` | `false` | Fail on warnings |
+| `image` | the release matching the action's ref | Image to run; a branch ref like `@master` runs `:latest` |
+| `cache` | `true` | Keep the 2 GB toolchain in the Actions cache, so only the first run pays the 90-second install |
+| `cache-dir` | under `RUNNER_TEMP` | Where the toolchain lives on the runner |
+
+Outputs: `results` (the path of the JSON Lines file), `total`, `compiled`, `failed`. The job summary gets a table of every file. Paths in annotations are relative to the repository root, so run it from there (the default).
+
 ## Running the image by hand
 
 The command is just a thin `docker run`. Doing it yourself:
 
 ```bash
 # run from the folder that holds MQL5/
-docker run --rm \
+docker run --rm --init \
   --user "$(id -u):$(id -g)" \
   -v "$PWD":/src \
   -v mql-compiler-cache:/cache \
-  psyb0t/mql-compiler:v0.2.1 MQL5/Experts
+  psyb0t/mql-compiler:v0.3.0 MQL5/Experts
 ```
 
-Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.
+Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. An `-I` folder has to be mounted too. `--init` lets Ctrl-C reach the compiler, which `--watch` needs. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.
 
 ## Agent integrations
 
-[`.agents/skills/mql-compiler`](.agents/skills/mql-compiler/SKILL.md) teaches a coding agent (Claude Code, Codex, OpenClaw) to install the command, compile, and read the errors without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
+[`.agents/skills/mql-compiler`](.agents/skills/mql-compiler/SKILL.md) teaches a coding agent (Claude Code, Codex, OpenClaw) to install the command, compile, and read the JSON results without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
 
 ## Development
 
@@ -170,7 +248,12 @@ make version    # print the version; V=X.Y.Z sets it
 make help       # every target
 ```
 
-Every tool runs from a digest-pinned image, so the host needs Docker and Make and nothing else. `make test` installs the toolchain into `.testing/cache` the first time and reuses it after. CI runs `make lint` and `make test`, builds and pushes the image with a Grype scan on every push, and ships the skill to ClawHub on release tags.
+Every tool runs from a digest-pinned image, so the host needs Docker and Make and nothing else. `make test` installs the toolchain into `.testing/cache` the first time and reuses it after. `make test` also runs a real `--update`, so it reinstalls the toolchain once per run. CI runs `make lint` and `make test`, runs the GitHub Action against the freshly built image, builds and pushes the image with a Grype scan on every push, and ships the skill to ClawHub on release tags.
+
+## Recommended brokers
+
+- [RoboForex](https://my.roboforex.com/en/?a=zswg)
+- [TeleTrade](https://my.teletrade-dj.com/agent_pp.html?agent_pp=26834897)
 
 ## License
 

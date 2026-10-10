@@ -2,6 +2,18 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.3.0, 2026-10-10
+
+- Breaking: results on stdout are JSON Lines by default. Each source gets a `file` record with its status, output path, error and warning counts, and every message as `{severity, file, line, column, code, text}`. A `summary` record follows each pass, and a run that cannot start prints an `error` record instead. The old `OK`/`FAIL` lines are behind `--text`. See "What comes out" in the README.
+- `--format gnu` prints `path:line:column: severity: text [code]` lines that editors jump to; `--format json|text|gnu` picks any of the three.
+- `--werror` counts a file with warnings as failed.
+- `-I DIR` / `--include DIR` adds an include folder outside the `MQL4`/`MQL5` tree, such as a shared library. The command mounts it, and it sits between the standard library and your own `Include`, which still wins.
+- `--watch` compiles, then compiles again whenever a `.mq4`, `.mq5` or `.mqh` under the given paths changes, until Ctrl-C. It lets other runs use the cache between passes.
+- `--version` prints the image version and the MetaEditor builds in the cache. `--update` reinstalls MT4 and MT5 from the newest installers and puts the old toolchain back if that fails.
+- A GitHub Action (`uses: psyb0t/docker-mql-compiler@v0.3.0`) compiles in CI, marks every error and warning on its source line, writes a job summary, and keeps the toolchain in the Actions cache.
+- The command's own errors (a missing path, refusing `/`) are JSON `error` records on stdout too, and it runs the container with `--init` so Ctrl-C and `docker stop` reach the compiler.
+- The README lists recommended brokers.
+
 ## v0.2.1, 2026-10-10
 
 - Paths with spaces compile. MetaEditor wrote no result for a source whose path had a space in it, so every such file failed with "MetaEditor wrote no result". The file is now compiled through a space-free link to its `MQL4`/`MQL5` folder (or its own folder when loose), and the messages show the real paths.

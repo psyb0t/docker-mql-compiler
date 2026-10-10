@@ -12,13 +12,13 @@ The image downloads and runs Windows executables from the internet and compiles 
 
 ## The container
 
-- **SEC4:** The image runs as UID 1000 (`USER 1000:1000`), and the wrapper passes the caller's UID and GID with `--user`. Never run the compile as root, and never add `--privileged`, host networking or the Docker socket to the wrapper's `docker run`.
+- **SEC4:** The image runs as UID 1000 (`USER 1000:1000`), and the wrapper passes the caller's UID and GID with `--user`. Never run the compile as root, and never add `--privileged`, host networking or the Docker socket to the wrapper's `docker run`. `--init` (tini as PID 1) stays: it forwards signals and reaps Wine's leftover processes.
 - **SEC5:** The wrapper mounts only what a compile needs (ARC7) and the cache volume. It refuses to mount `/`, and it refuses a path that does not exist instead of letting Docker create it.
 - **SEC6:** Nothing writes into the user's tree except the `.ex4`/`.ex5` next to each source (ARC8).
 
 ## Pins and supply chain
 
-- **SEC7:** Pin every third-party dependency: the `debian:trixie-slim` base image by digest, the lint and scan images in the `Makefile` (shellcheck, shfmt, hadolint, gitleaks, grype) by version and digest, and third-party GitHub Actions by commit SHA. Never loosen a pin. The maintainer's reusable workflows (`psyb0t/reusable-github-workflows/...@master`) are deliberately unpinned so a fix reaches every caller.
+- **SEC7:** Pin every third-party dependency: the `debian:trixie-slim` base image by digest, the lint and scan images in the `Makefile` (shellcheck, shfmt, hadolint, gitleaks, grype) by version and digest, and third-party GitHub Actions by commit SHA, in the workflows and in `action.yml` alike (`actions/cache`). Never loosen a pin. The maintainer's reusable workflows (`psyb0t/reusable-github-workflows/...@master`) are deliberately unpinned so a fix reaches every caller.
 - **SEC8:** `make sec` passes before a release: gitleaks on the working tree, hadolint at warning level, and grype on the image failing on fixed vulnerabilities at `GRYPE_SEVERITY` (high by default).
 - **SEC9:** Review an outside contribution's `Makefile`, `Dockerfile`, `.github/workflows/`, `install.sh`, `wrapper.sh`, `entrypoint.sh` and `tests/test.sh` changes before running any of it. `make test` and `make lint` run that code with Docker access. Read the diff first.
 - **SEC10:** New third-party components in the image are listed in `THIRD_PARTY.md` with their license.

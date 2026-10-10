@@ -11,7 +11,8 @@ Prefix: TST.
 
 ## How the suite works
 
-- **TST5:** The suite is end to end: it runs the built image, by hand (`compile`, sources at `/src`) and through `wrapper.sh` (`wrapped`, from other folders with relative and absolute paths), and checks stdout, the exit status and the files written. Keep both paths covered; the wrapper's mounts are where path bugs live.
+- **TST5:** The suite is end to end: it runs the built image, by hand (`compile`, sources at `/src`) and through `wrapper.sh` (`wrapped`, from other folders with relative and absolute paths), and checks stdout, stderr, the exit status and the files written. Keep both paths covered; the wrapper's mounts are where path bugs live. Check JSON results with `expect_record` and a `jq` condition on the fields, not by matching text; keep text matching for `--text` and `--format gnu` tests.
+- **TST11:** `make test` exercises every option, including a real `--update` (a second full install) and `--watch` (started, changed, then stopped with `docker stop`). CI additionally runs the GitHub Action against the built image (`uses: ./` in the `test` job); a change to `action.yml` or `action/run.sh` keeps those steps passing.
 - **TST6:** Each test group starts from `fresh_workdir`, a copy of `tests/fixtures/` in `.testing/work`, so outputs never land in the repository and one test cannot leak into the next.
 - **TST7:** Fixtures under `tests/fixtures/` mirror a real tree: `MQL4/` and `MQL5/` with `Experts`, `Indicators`, `Scripts`, `Include` and `Files`, plus `loose/` outside both. A fixture that must fail or must prove an override says so in a comment at its top (`Broken.mq5`, `Override.mq5`, the shadowing `VirtualKeys.mqh` and `WinUser32.mqh`).
 - **TST8:** A fixture that proves an include or resource is used must fail to compile when it is missing (`Override.mq5` uses a macro only the user's header defines; the missing-resource test removes `MQL5/Files`). A test that passes either way proves nothing.

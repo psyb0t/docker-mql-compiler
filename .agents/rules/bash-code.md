@@ -15,8 +15,8 @@ Every script is Bash. `make lint` runs shellcheck, shfmt (`-i 4 -ci`) and hadoli
 
 ## Output and logging
 
-- **SH7:** In `entrypoint.sh`, stdout carries only the results the user asked for (the `OK`/`FAIL` lines and their compiler messages) and `--help`. Every diagnostic goes through `log LEVEL "msg key=value"`, which writes one JSON line (time, level, file, line, func, msg) to stderr through `jq`.
+- **SH7:** In `entrypoint.sh`, stdout carries only results (the ARC17 records, or their `--text`/`gnu` renderings) and `--help`. Build every JSON record with `jq -n --arg`/`--argjson`, never by string interpolation. Every diagnostic goes through `log LEVEL "msg key=value"`, which writes one JSON line (time, level, file, line, func, msg) to stderr through `jq`. `die` also writes an `error` record to fd 7 (the real stdout) in JSON mode.
 - **SH8:** Decisions that retry, fall back or skip log at `WARN` with a `reason=` value (`reason=crl_unreachable`); failures that end the run log at `ERROR` before exiting.
-- **SH9:** `wrapper.sh` and `install.sh` are user-facing CLIs: they print plain one-line messages to stderr (`fail`), not JSON.
+- **SH9:** `install.sh` is a user-facing CLI: it prints plain one-line messages, not JSON. `wrapper.sh` prints its errors as a plain line on stderr and, in JSON mode, also as an `error` record on stdout (escaped by `json_string`, since the host may lack `jq`). `action/run.sh` talks to GitHub through workflow commands (`::error`, `::warning`) and `$GITHUB_OUTPUT`/`$GITHUB_STEP_SUMMARY`.
 - **SH10:** Never silence a command (`2>/dev/null`, `>/dev/null`, `|| true`) without a comment on that line or the one above saying why the output or the failure does not matter (Wine and Xvfb noise, MetaEditor's exit code, best-effort cleanup).
 - **SH11:** A failure inside `$(...)` must still stop the run: collect into a variable with a command substitution, not a process substitution, where `die` has to end the script (see `main`).

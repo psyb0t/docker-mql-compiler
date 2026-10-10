@@ -8,8 +8,14 @@
 #   mql-compiler                         compile everything under the current folder
 #   mql-compiler ~/mt/MQL5/Experts       compile one folder, from anywhere
 #   mql-compiler Foo.mq5 /abs/Bar.mq4    compile these files
+#   mql-compiler -I ~/libs MQL5          add an include folder (mounted too)
+#   mql-compiler --watch MQL5            recompile on every change until Ctrl-C
 #   mql-compiler --setup                 only install the MetaQuotes toolchain
-#   mql-compiler --help                  the compiler's own help
+#   mql-compiler --help                  the compiler's own help, every option
+#
+# Results come out as JSON Lines on stdout unless --text or --format says
+# otherwise; this command's own errors (a missing path, refusing /) follow
+# the same format, so a caller parsing stdout always gets a record.
 #
 # Paths may be relative or absolute and sit anywhere. For each one this
 # mounts the folder it includes from (so its Include and other folders come
@@ -38,9 +44,39 @@ readonly DEFAULT_VOLUME="mql-compiler-cache"
 readonly EXIT_USAGE=2
 readonly FORWARDED_VARS=(MQL_COMPILER_MT4_URL MQL_COMPILER_MT5_URL)
 readonly MQL_FOLDERS=(MQL4 MQL5)
+readonly FORMAT_JSON="json"
+
+# The image's output format, so the command's own errors come out the same
+# way: an {"type":"error"} record on stdout for JSON, a plain line otherwise.
+output_format="$FORMAT_JSON"
+previous=""
+for arg in "$@"; do
+    case "$arg" in
+        --text) output_format="text" ;;
+        --format=*) output_format="${arg#--format=}" ;;
+    esac
+    if [[ "$previous" == "--format" ]]; then
+        output_format="$arg"
+    fi
+    previous="$arg"
+done
+
+# A JSON string literal; this runs on the host, where jq may be missing.
+json_string() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "$value"
+}
 
 fail() {
     printf 'mql-compiler: %s\n' "$*" >&2
+    if [[ "$output_format" == "$FORMAT_JSON" ]]; then
+        printf '{"type":"error","message":%s}\n' "$(json_string "$*")"
+    fi
     exit "$EXIT_USAGE"
 }
 
@@ -90,27 +126,62 @@ volume="${MQL_COMPILER_VOLUME:-$DEFAULT_VOLUME}"
 workdir="$(pwd -P)"
 
 # Paths become absolute and symlink-free: the container holds only the
-# mounted folders, at their real host paths.
+# mounted folders, at their real host paths. -I folders are mounted as they
+# are; sources by mount_root.
 args=()
 roots=()
-for arg in "$@"; do
-    if [[ "$arg" == -* ]]; then
-        args+=("$arg")
-        continue
-    fi
-    [[ -e "$arg" ]] || fail "no such file or folder: $arg"
-    path="$(realpath "$arg")"
-    args+=("$path")
-    roots+=("$(mount_root "$path")")
+compiles=true
+targets=0
+while (($#)); do
+    case "$1" in
+        --version | --setup | --update | -h | --help)
+            compiles=false
+            args+=("$1")
+            ;;
+        --format)
+            args+=("$1")
+            if (($# >= 2)); then
+                shift
+                args+=("$1")
+            fi
+            ;;
+        -I | --include | -I* | --include=*)
+            case "$1" in
+                -I | --include)
+                    (($# >= 2)) || fail "$1 needs a folder"
+                    shift
+                    folder="$1"
+                    ;;
+                --include=*) folder="${1#--include=}" ;;
+                *) folder="${1#-I}" ;;
+            esac
+            [[ -d "$folder" ]] || fail "no such include folder: $folder"
+            folder="$(realpath "$folder")"
+            args+=(-I "$folder")
+            roots+=("$folder")
+            ;;
+        -*) args+=("$1") ;;
+        *)
+            [[ -e "$1" ]] || fail "no such file or folder: $1"
+            path="$(realpath "$1")"
+            args+=("$path")
+            roots+=("$(mount_root "$path")")
+            targets=$((targets + 1))
+            ;;
+    esac
+    shift
 done
 # No path means the current folder, which still needs its MQL4/MQL5 parent.
-if ((${#roots[@]} == 0)); then
+if ((targets == 0)) && [[ "$compiles" == true ]]; then
     args+=("$workdir")
     roots+=("$(mount_root "$workdir")")
 fi
 
 docker_args=(
     --rm
+    # tini as PID 1 passes Ctrl-C and docker stop on to the compiler, which
+    # --watch needs to stop, and reaps Wine's leftover processes.
+    --init
     --user "$(id -u):$(id -g)"
     -w "$workdir"
     -v "$volume":/cache
@@ -126,7 +197,7 @@ while IFS= read -r root; do
     done
     kept+=("$root")
     docker_args+=(-v "$root:$root")
-done < <(printf '%s\n' "${roots[@]}" | sort -u)
+done < <(printf '%s\n' ${roots[@]+"${roots[@]}"} | sort -u | sed '/^$/d')
 
 # Forward installer overrides only when set, so the image keeps its defaults.
 for var in "${FORWARDED_VARS[@]}"; do

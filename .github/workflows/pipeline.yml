@@ -37,6 +37,38 @@ jobs:
         run: scripts/ci-dockerhub-login.sh
       - name: Test
         run: make test
+      # The GitHub Action in this repository, run against the image make test
+      # just built and the toolchain it installed.
+      - name: Action compiles a good file
+        id: action_ok
+        uses: ./
+        with:
+          paths: tests/fixtures/MQL5/Experts/Hello.mq5
+          image: psyb0t/mql-compiler:dev
+          cache: "false"
+          cache-dir: ${{ github.workspace }}/.testing/cache
+      - name: Action fails on a broken file
+        id: action_broken
+        continue-on-error: true
+        uses: ./
+        with:
+          paths: |
+            tests/fixtures/MQL5/Experts/Broken.mq5
+            tests/fixtures/MQL4/Experts/Hello.mq4
+          image: psyb0t/mql-compiler:dev
+          cache: "false"
+          cache-dir: ${{ github.workspace }}/.testing/cache
+      - name: Check the action's outcomes
+        env:
+          OK_COMPILED: ${{ steps.action_ok.outputs.compiled }}
+          BROKEN_OUTCOME: ${{ steps.action_broken.outcome }}
+          BROKEN_FAILED: ${{ steps.action_broken.outputs.failed }}
+          BROKEN_COMPILED: ${{ steps.action_broken.outputs.compiled }}
+        run: |
+          test "$OK_COMPILED" = 1
+          test "$BROKEN_OUTCOME" = failure
+          test "$BROKEN_FAILED" = 1
+          test "$BROKEN_COMPILED" = 1
 
   badges:
     if: github.ref_name == github.event.repository.default_branch || startsWith(github.ref, 'refs/tags/')
