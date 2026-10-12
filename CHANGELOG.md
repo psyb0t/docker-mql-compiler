@@ -4,6 +4,7 @@ All notable changes per release. Versions follow [semver](https://semver.org) pr
 
 ## Unreleased
 
+- Moved the detailed command, installation, architecture, CI and development documentation into `docs/`. The README keeps the quick start and links to each guide, so Docker Hub can accept its overview again.
 - Added FTMO to the README's recommended brokers and prop firms, with its MT4 and MT5 support and simulated trading accounts described.
 
 ## v0.5.0, 2026-10-10

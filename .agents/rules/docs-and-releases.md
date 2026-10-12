@@ -5,13 +5,17 @@ Prefix: DOC.
 ## Docs move with the code
 
 - **DOC1:** A change that alters behaviour a user or agent can see updates the docs in the same change. The owners:
-  - what a run does, paths, includes, options, the JSON output, exit codes, environment variables, the GitHub Action's inputs and outputs: `README.md`;
+  - project overview and quick start: `README.md`;
+  - what a run does, paths, includes, options, the JSON output and exit codes: `docs/usage.md`;
+  - installation, upgrades and environment variables: `docs/installation.md`;
+  - Wine, signature checks, cache layout and mounts: `docs/architecture.md`;
+  - the GitHub Action's inputs and outputs and manual Docker runs: `docs/ci-and-docker.md`;
   - the GitHub Action's own metadata: the `description` fields in `action.yml`;
   - the same facts for agents: `.agents/skills/mql-compiler/SKILL.md`;
   - installing, upgrading, the first run and troubleshooting: `.agents/skills/mql-compiler/references/installation.md`;
   - the in-image summary: `usage()` in `entrypoint.sh` (`--help`) and the header comments of `entrypoint.sh` and `wrapper.sh`;
   - internals and landmines: `AGENTS.md` and `.agents/rules/`;
-  - Make targets: the `##` comments in the `Makefile` (`make help`) and the README's development section.
+  - Make targets: the `##` comments in the `Makefile` (`make help`) and `docs/development.md`.
 - **DOC2:** README, SKILL.md, `--help` and AGENTS.md must not contradict each other. When one changes a fact, check the other three for it.
 - **DOC3:** A changed project convention updates `AGENTS.md` or the matching file in `.agents/rules/` in the same change.
 
