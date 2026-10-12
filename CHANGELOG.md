@@ -2,6 +2,10 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## Unreleased
+
+- Added FTMO to the README's recommended brokers and prop firms, with its MT4 and MT5 support and simulated trading accounts described.
+
 ## v0.5.0, 2026-10-10
 
 - The cached MT4 and MT5 terminals are now portable folders, `terminals/mt4` and `terminals/mt5` in the cache volume, instead of installs under `Program Files`. After installing a terminal and unpacking its standard library, setup moves its folder there, and every compile uses it exactly like a `--mt4-terminal`/`--mt5-terminal` folder. An existing cache is moved on its next run, with no download; MetaEditor builds stay as they were.

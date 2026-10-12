@@ -35,7 +35,7 @@ FAIL MQL5/Experts/Scalper.mq5 (1 errors, 0 warnings)
 - [Running the image by hand](#running-the-image-by-hand)
 - [Agent integrations](#agent-integrations)
 - [Development](#development)
-- [Recommended brokers](#recommended-brokers)
+- [Recommended brokers and prop firms](#recommended-brokers-and-prop-firms)
 - [License](#license)
 
 > [!WARNING]
@@ -267,10 +267,11 @@ make help       # every target
 
 Every tool runs from a digest-pinned image, so the host needs Docker and Make and nothing else. `make test` installs the toolchain into `.testing/cache` the first time and reuses it after. `make test` also runs a real `--update`, so it reinstalls the toolchain once per run, and covers the installer, the GitHub Action's script and the failure paths. CI runs `make lint` and `make test-all`, runs the GitHub Action against the freshly built image, builds and pushes the image with a Grype scan on every push, and ships the skill to ClawHub on release tags.
 
-## Recommended brokers
+## Recommended brokers and prop firms
 
 - [RoboForex](https://my.roboforex.com/en/?a=zswg)
 - [TeleTrade](https://my.teletrade-dj.com/agent_pp.html?agent_pp=26834897)
+- [FTMO](https://join.ftmo.com/uYaZPRmKowRZIKtuXdkE): prop firm with MT4 and MT5 support. Trading accounts use simulated capital.
 
 ## License
 
