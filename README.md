@@ -64,7 +64,7 @@ The docs links are absolute so they work on Docker Hub too.
 
 ```yaml
 - uses: actions/checkout@v6
-- uses: psyb0t/docker-mql-compiler@v0.5.0
+- uses: psyb0t/docker-mql-compiler@master
   with:
     paths: MQL5/Experts
 ```

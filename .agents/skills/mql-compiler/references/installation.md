@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/i
 | `--rolling` | Pin `psyb0t/mql-compiler:latest` instead of the newest release tag |
 | `--uninstall` | Remove the command and the image it was pinned to; the toolchain volume stays |
 
-The installer pins the newest GitHub release (for example `psyb0t/mql-compiler:v0.3.0`), pulls it, and writes the pin into the command file. There is no config folder. It refuses to overwrite a file at the target path that it did not install. A per-user install warns when `~/.local/bin` is not on `PATH` and prints the line to add to `~/.bashrc` or `~/.zshrc`.
+The installer pins the newest GitHub release tag, pulls it, and writes the pin into the command file. There is no config folder. It refuses to overwrite a file at the target path that it did not install. A per-user install warns when `~/.local/bin` is not on `PATH` and prints the line to add to `~/.bashrc` or `~/.zshrc`.
 
 ## Upgrade
 

@@ -2,8 +2,9 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
-## Unreleased
+## v0.5.1, 2026-10-17
 
+- The GitHub Action examples use `psyb0t/docker-mql-compiler@master`, the manual `docker run` example uses `psyb0t/mql-compiler:latest`, and the installation guide no longer names an old release as its example.
 - Moved the detailed command, installation, architecture, CI and development documentation into `docs/`. The README keeps the quick start and links to each guide, so Docker Hub can accept its overview again.
 - Added FTMO to the README's recommended brokers and prop firms, with its MT4 and MT5 support and simulated trading accounts described.
 

@@ -4,7 +4,7 @@ Compile on every push, fail the job on errors, and get each error marked on its 
 
 ```yaml
 - uses: actions/checkout@v6
-- uses: psyb0t/docker-mql-compiler@v0.5.0
+- uses: psyb0t/docker-mql-compiler@master
   with:
     paths: |
       MQL5/Experts
@@ -32,7 +32,7 @@ docker run --rm --init \
   --user "$(id -u):$(id -g)" \
   -v "$PWD":/src \
   -v mql-compiler-cache:/cache \
-  psyb0t/mql-compiler:v0.5.0 MQL5/Experts
+  psyb0t/mql-compiler:latest MQL5/Experts
 ```
 
 Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. An `-I` folder has to be mounted too. `--init` lets Ctrl-C reach the compiler, which `--watch` needs. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.

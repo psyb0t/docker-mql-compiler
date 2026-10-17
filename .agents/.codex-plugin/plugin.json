@@ -1,6 +1,6 @@
 {
   "name": "mql-compiler",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Compile MQL4 and MQL5 sources to .ex4/.ex5 on Linux with MetaEditor under Wine in Docker, and read the compiler's errors.",
   "author": {
     "name": "psyb0t",
