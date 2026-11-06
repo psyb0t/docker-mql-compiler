@@ -23,6 +23,10 @@ CACHE_DRIVE_C="$TEST_CACHE/uid-$(id -u)/wine/drive_c"
 readonly CACHE_DRIVE_C
 readonly WORK_FROM_REPO=".testing/work"
 readonly WRAPPER="$REPO_ROOT/wrapper.sh"
+# Every container the suite starts gets the profile the command and the
+# Action pass, so the suite runs where Docker's default filter stops Wine.
+readonly SECCOMP_PROFILE_FILE="$REPO_ROOT/seccomp/wine.json"
+readonly SECCOMP_OPT="seccomp=$SECCOMP_PROFILE_FILE"
 readonly EXIT_OK=0
 readonly EXIT_COMPILE_ERRORS=1
 readonly EXIT_USAGE=2
@@ -65,7 +69,7 @@ compile() {
     local err_file
     err_file="$(mktemp)"
     STATUS=0
-    OUT="$(docker run --rm --user "$(id -u):$(id -g)" \
+    OUT="$(docker run --rm --user "$(id -u):$(id -g)" --security-opt "$SECCOMP_OPT" \
         -v "$WORK_ROOT":/src -v "$COMPILE_CACHE":/cache \
         ${DOCKER_EXTRA[@]+"${DOCKER_EXTRA[@]}"} \
         "$IMAGE" "$@" 2>"$err_file")" || STATUS=$?
@@ -81,6 +85,7 @@ wrapped() {
     err_file="$(mktemp)"
     STATUS=0
     OUT="$(cd "$from" && MQL_COMPILER_IMAGE="$IMAGE" MQL_COMPILER_VOLUME="$COMPILE_CACHE" \
+        MQL_COMPILER_SECCOMP="${WRAPPED_SECCOMP-$SECCOMP_PROFILE_FILE}" \
         bash "$WRAPPER" "$@" 2>"$err_file")" || STATUS=$?
     ERR="$(cat "$err_file")"
     rm -f "$err_file"
@@ -468,10 +473,10 @@ test_parallel_runs() {
     local first_out second_out first_status=0 second_status=0
     first_out="$(mktemp)"
     second_out="$(mktemp)"
-    docker run --rm --user "$(id -u):$(id -g)" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
+    docker run --rm --user "$(id -u):$(id -g)" --security-opt "$SECCOMP_OPT" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
         "$IMAGE" MQL5 >"$first_out" 2>&1 &
     local first_pid=$!
-    docker run --rm --user "$(id -u):$(id -g)" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
+    docker run --rm --user "$(id -u):$(id -g)" --security-opt "$SECCOMP_OPT" -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
         "$IMAGE" MQL4 >"$second_out" 2>&1 || second_status=$?
     wait "$first_pid" || first_status=$?
     OUT="$(cat "$first_out" "$second_out")"
@@ -502,7 +507,7 @@ test_watch() {
     printf '%s\n' 'string SharedHello() { return "shared"; }' >"$WORK_ROOT/shared/Shared/Lib.mqh"
     local name="mql-compiler-test-watch-$$" out_file
     out_file="$(mktemp)"
-    docker run --rm --init --name "$name" --user "$(id -u):$(id -g)" \
+    docker run --rm --init --name "$name" --user "$(id -u):$(id -g)" --security-opt "$SECCOMP_OPT" \
         -v "$WORK_ROOT":/src -v "$TEST_CACHE":/cache \
         "$IMAGE" --watch -I shared MQL5/Scripts >"$out_file" 2>/dev/null &
     local client_pid=$!
@@ -639,6 +644,9 @@ test_setup_failures() {
     expect_status "a first run whose installer cannot be downloaded" "$EXIT_USAGE"
     expect_record "a failed setup is an error record" '.type == "error" and .message == "toolchain setup failed (see the log lines above)"'
     expect_log "the wrapper hands MQL_COMPILER_MT5_URL to the image" 'installer download failed platform=mt5 url=file:///nonexistent/mt5setup\.exe'
+    WRAPPED_SECCOMP=/nonexistent/seccomp.json wrapped "$WORK_ROOT" MQL5/Experts/Hello.mq5
+    expect_status "a missing seccomp profile" "$EXIT_USAGE"
+    expect_record "the wrapper names the missing seccomp profile" '.type == "error" and .message == "no such seccomp profile: /nonexistent/seccomp.json"'
 
     DOCKER_EXTRA=(-v "$fakes":/fakes:ro -e MQL_COMPILER_MT5_URL=file:///fakes/unsigned.exe)
     compile MQL5/Experts/Hello.mq5
@@ -742,7 +750,7 @@ run_unit() {
             "PASS "*) pass "unit: ${line#PASS }" ;;
             "FAIL "*) fail "unit: ${line#FAIL }" "see tests/unit/$script.sh" ;;
         esac
-    done < <(docker run --rm --user "$(id -u):$(id -g)" --entrypoint bash \
+    done < <(docker run --rm --user "$(id -u):$(id -g)" --security-opt "$SECCOMP_OPT" --entrypoint bash \
         -v "$REPO_ROOT/tests/unit":/unit:ro -v "$TEST_CACHE":/cache \
         "$IMAGE" "/unit/$script.sh" 2>/dev/null)
     if ((lines == 0)); then
@@ -847,6 +855,12 @@ test_install() {
     else
         fail "the installed command carries the marker and the :dev pin" "$command is missing, not executable, or pinned elsewhere"
     fi
+    local profile="$home/.local/share/mql-compiler/seccomp.json"
+    if cmp -s "$profile" "$SECCOMP_PROFILE_FILE" && grep -qx "readonly SECCOMP_PROFILE=\"$profile\"" "$command"; then
+        pass "the install puts the seccomp profile next to the command and pins its path"
+    else
+        fail "the install puts the seccomp profile next to the command and pins its path" "$profile is missing or differs, or $command points elsewhere"
+    fi
     status=0
     OUT="$(MQL_COMPILER_VOLUME="$TEST_CACHE" "$command" --version 2>/dev/null)" || status=$?
     STATUS="$status"
@@ -882,6 +896,11 @@ test_install() {
     MQL_COMPILER_ENV=dev install_sh --user
     install_sh --user --uninstall
     expect_status "uninstalling a dev install" "$EXIT_OK"
+    if [[ -e "$home/.local/share/mql-compiler/seccomp.json" ]]; then
+        fail "uninstall removes the seccomp profile" "it is still there"
+    else
+        pass "uninstall removes the seccomp profile"
+    fi
     if [[ ! -e "$command" ]] && docker image inspect psyb0t/mql-compiler:dev >/dev/null 2>&1; then
         pass "uninstall removes the command and keeps the local :dev image"
     else

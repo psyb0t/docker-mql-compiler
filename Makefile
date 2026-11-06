@@ -12,13 +12,18 @@ HADOLINT_IMAGE   := hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e
 GITLEAKS_IMAGE   := ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 GRYPE_IMAGE      := anchore/grype:v0.120.1@sha256:e4a44ef45d285b829ce6efe2642980329661bd2d18eab5fc539138d4adaebbbe
 
-SHELL_SCRIPTS := entrypoint.sh wrapper.sh install.sh action/run.sh tests/test.sh tests/unit/lib.sh tests/unit/signature.sh tests/unit/no-result.sh tests/unit/install-timeout.sh scripts/ci-dockerhub-login.sh scripts/ci-wine-diagnostics.sh
+SHELL_SCRIPTS := entrypoint.sh wrapper.sh install.sh action/run.sh tests/test.sh tests/unit/lib.sh tests/unit/signature.sh tests/unit/no-result.sh tests/unit/install-timeout.sh scripts/ci-dockerhub-login.sh scripts/make-seccomp.sh
 # The toolchain cache the tests reuse between runs (gitignored).
 TEST_CACHE    := $(CURDIR)/.testing/cache
 GRYPE_SEVERITY ?= high
 RUN_AS_ME     := --user $$(id -u):$$(id -g)
+# Docker's default seccomp profile (moby/profiles seccomp/v0.3.0, the one
+# Docker 29 builds in), pinned by checksum; `make seccomp` adds userfaultfd.
+SECCOMP_BASE_URL    := https://raw.githubusercontent.com/moby/profiles/seccomp/v0.3.0/seccomp/default.json
+SECCOMP_BASE_SHA256 := 6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6
+SECCOMP_PROFILE     := seccomp/wine.json
 
-.PHONY: help version build install uninstall test test-all lint format sec sec-secrets sec-image sec-dockerfile clean
+.PHONY: help version build seccomp install uninstall test test-all lint format sec sec-secrets sec-image sec-dockerfile clean
 
 help: ## Show the documented targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -38,6 +43,10 @@ version: export NEW_VERSION = $(V)
 
 build: ## Build the image as :dev, :v<VERSION> and :latest
 	docker build -t $(IMAGE_NAME):$(DEV_TAG) -t $(IMAGE_NAME):$(TAG) -t $(IMAGE_NAME):latest .
+
+seccomp: build ## Regenerate seccomp/wine.json: Docker's default profile plus userfaultfd, which Wine needs under Linux 7.0
+	docker run --rm $(RUN_AS_ME) -v "$(CURDIR)":/repo -w /repo --entrypoint bash $(IMAGE_NAME):$(DEV_TAG) \
+		scripts/make-seccomp.sh "$(SECCOMP_BASE_URL)" "$(SECCOMP_BASE_SHA256)" "$(SECCOMP_PROFILE)"
 
 install: build ## Build :dev and install the mql-compiler command from this checkout (~/.local/bin)
 	MQL_COMPILER_ENV=dev bash ./install.sh

@@ -2,6 +2,11 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.5, 2026-11-06
+
+- The command and the GitHub Action work on Ubuntu 26.04 and other Linux 7.0 hosts again, `ubuntu-latest` runners included. There, Docker's default seccomp filter refuses `userfaultfd`, which Wine 11 calls while it starts, and Wine stopped with `wine: socket : Function not implemented` before the first install could begin. The command now runs its container with `seccomp/wine.json`: Docker's own default profile with that one call allowed. The installer puts the profile next to the command (`~/.local/share/mql-compiler/seccomp.json`, or `/usr/local/share/mql-compiler/seccomp.json` system wide) and `--uninstall` removes it; run the installer again to get it. `MQL_COMPILER_SECCOMP` points the command at another profile, and a path that does not exist is exit `2`. The Action passes its own copy, so `runs-on: ubuntu-24.04` is no longer needed. A manual `docker run` on such a host needs `--security-opt seccomp=seccomp/wine.json`.
+- CI runs the tests on `ubuntu-latest` again, with every container started under the profile, and the diagnostics job that found the cause is gone.
+
 ## v0.5.4, 2026-11-06
 
 - The GitHub Action needs an `ubuntu-24.04` runner for now. GitHub moved `ubuntu-latest` to Ubuntu 26.04, and on those runners Wine never finishes creating its prefix inside the container: v0.5.3's CI run showed `creating the Wine prefix did not finish waited=300s`. The README and the CI guide examples now set `runs-on: ubuntu-24.04`.

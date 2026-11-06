@@ -28,6 +28,12 @@ readonly DEVELOPMENT_IMAGE="$IMAGE_REPO:dev"
 readonly DEVELOPMENT_ENVIRONMENT="dev"
 readonly GITHUB_API_LATEST="https://api.github.com/repos/psyb0t/docker-mql-compiler/releases/latest"
 readonly WRAPPER_URL="https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/wrapper.sh"
+readonly SECCOMP_URL="https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/seccomp/wine.json"
+readonly SYSTEM_SHARE_DIR="/usr/local/share/mql-compiler"
+readonly USER_SHARE_DIR="$HOME/.local/share/mql-compiler"
+readonly SECCOMP_FILE_NAME="seccomp.json"
+# A rule every copy of the profile carries; a download without it is not one.
+readonly SECCOMP_MARKER="userfaultfd"
 readonly CACHE_VOLUME="mql-compiler-cache"
 # shellcheck disable=SC2016 # must reach the rc file unexpanded
 readonly USER_PATH_SNIPPET='export PATH="$HOME/.local/bin:$PATH"'
@@ -36,7 +42,9 @@ MODE=""
 ROLLING=0
 UNINSTALL=0
 INSTALL_PATH=""
+SECCOMP_PATH=""
 WRAPPER_TEMPORARY_FILE=""
+SECCOMP_TEMPORARY_FILE=""
 
 say() { printf '==> %s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -46,7 +54,7 @@ fail() {
 }
 
 trap 'printf "error: install failed, see %s\n" "$INSTALL_LOG_FILE" >&2' ERR
-trap 'rm -f "$WRAPPER_TEMPORARY_FILE"' EXIT
+trap 'rm -f "$WRAPPER_TEMPORARY_FILE" "$SECCOMP_TEMPORARY_FILE"' EXIT
 exec > >(tee -a "$INSTALL_LOG_FILE") 2>&1
 
 development_enabled() {
@@ -65,10 +73,12 @@ resolve_mode() {
         system)
             ((EUID == 0)) || fail "the system-wide install needs root: re-run with sudo, or use --user"
             INSTALL_PATH="$SYSTEM_INSTALL_DIR/$COMMAND_NAME"
+            SECCOMP_PATH="$SYSTEM_SHARE_DIR/$SECCOMP_FILE_NAME"
             ;;
         user)
             ((EUID != 0)) || fail "the per-user install must not run as root: run it as your normal account, or use --system"
             INSTALL_PATH="$USER_INSTALL_DIR/$COMMAND_NAME"
+            SECCOMP_PATH="$USER_SHARE_DIR/$SECCOMP_FILE_NAME"
             ;;
     esac
 }
@@ -114,6 +124,22 @@ ensure_managed() {
     fi
 }
 
+# Installs the seccomp profile the command passes to docker run.
+write_seccomp() {
+    local source_dir
+    install -d "$(dirname "$SECCOMP_PATH")"
+    SECCOMP_TEMPORARY_FILE="$(mktemp)"
+    if development_enabled; then
+        source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        cp "$source_dir/seccomp/wine.json" "$SECCOMP_TEMPORARY_FILE"
+    else
+        curl -fsSL "$SECCOMP_URL" >"$SECCOMP_TEMPORARY_FILE"
+    fi
+    grep -Fq "$SECCOMP_MARKER" "$SECCOMP_TEMPORARY_FILE" || fail "the downloaded seccomp profile is not the mql-compiler one"
+    install -m 0644 "$SECCOMP_TEMPORARY_FILE" "$SECCOMP_PATH"
+    say "installed $SECCOMP_PATH"
+}
+
 write_command() {
     local image="$1" source_dir
     ensure_managed
@@ -128,6 +154,7 @@ write_command() {
     fi
     grep -Fq "$WRAPPER_MARKER" "$WRAPPER_TEMPORARY_FILE" || fail "the downloaded wrapper is not an mql-compiler command"
     sed -i "s|^readonly PINNED_IMAGE=.*|readonly PINNED_IMAGE=\"$image\"|" "$WRAPPER_TEMPORARY_FILE"
+    sed -i "s|^readonly SECCOMP_PROFILE=.*|readonly SECCOMP_PROFILE=\"$SECCOMP_PATH\"|" "$WRAPPER_TEMPORARY_FILE"
     bash -n "$WRAPPER_TEMPORARY_FILE"
     install -m 0755 "$WRAPPER_TEMPORARY_FILE" "$INSTALL_PATH"
     say "installed $INSTALL_PATH (pinned to $image)"
@@ -181,6 +208,12 @@ uninstall() {
     image="$(installed_image)"
     rm -f "$INSTALL_PATH"
     say "removed $INSTALL_PATH"
+    if [[ -f "$SECCOMP_PATH" ]]; then
+        rm -f "$SECCOMP_PATH"
+        # Best effort: the share folder goes only when nothing else is in it.
+        rmdir "$(dirname "$SECCOMP_PATH")" 2>/dev/null || true
+        say "removed $SECCOMP_PATH"
+    fi
     drop_pinned_image "$image"
     printf '\nThe toolchain volume is kept, since other users on this machine may share it. To free its disk space too:\n\n  docker volume rm %s\n\n' "$CACHE_VOLUME"
 }
@@ -211,6 +244,7 @@ main() {
     image="$(resolve_image)"
     say "pinning to $image"
     prepare_image "$image"
+    write_seccomp
     write_command "$image"
     if ! development_enabled; then
         drop_previous_image "$previous" "$image"

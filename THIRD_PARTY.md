@@ -12,6 +12,7 @@ The image is built from Debian packages, plus Wine from WineHQ's package reposit
 | [jq](https://jqlang.org) | MIT | Debian `jq` | the image |
 | [inotify-tools](https://github.com/inotify-tools/inotify-tools) | GPL-2.0-or-later | Debian `inotify-tools` | the image |
 | [actions/cache](https://github.com/actions/cache) | MIT | GitHub, pinned by commit in `action.yml` | the GitHub Action, at run time |
+| [Docker's default seccomp profile](https://github.com/moby/profiles) | Apache-2.0 | moby/profiles `seccomp/v0.3.0`, pinned by checksum in the `Makefile` | `seccomp/wine.json` (with `userfaultfd` added), installed next to the command |
 
 Their corresponding source is available from Debian (`apt-get source <package>`), and Wine's from WineHQ (https://dl.winehq.org/wine/source/).
 

@@ -90,7 +90,9 @@ compile() {
     done <<<"${INPUT_PATHS:-.}"
 
     log "compiling: ${args[*]}"
-    MQL_COMPILER_IMAGE="${ACTION_IMAGE:?}" MQL_COMPILER_VOLUME="${ACTION_CACHE_DIR:?}" \
+    # The action's own copy of the seccomp profile, since nothing installed one.
+    MQL_COMPILER_SECCOMP="$ACTION_ROOT/seccomp/wine.json" \
+        MQL_COMPILER_IMAGE="${ACTION_IMAGE:?}" MQL_COMPILER_VOLUME="${ACTION_CACHE_DIR:?}" \
         bash "$ACTION_ROOT/wrapper.sh" "${args[@]}" >"$results" || status=$?
     cat "$results"
     annotate "$results"

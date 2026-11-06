@@ -40,10 +40,15 @@
 #   MQL_COMPILER_MT4_URL  MT4 installer to use instead of RoboForex's
 #   MQL_COMPILER_MT5_URL  MT5 installer to use instead of RoboForex's
 #   MQL_COMPILER_INSTALL_TIMEOUT  seconds one platform's install may take (default 600)
+#   MQL_COMPILER_SECCOMP  seccomp profile for docker run (default: the one
+#                         install.sh put next to the command)
 set -euo pipefail
 
 # install.sh writes the image this command is pinned to.
 readonly PINNED_IMAGE="psyb0t/mql-compiler:latest"
+# install.sh writes the seccomp profile it installed: Docker's default one
+# plus userfaultfd, which Wine needs under Linux 7.0. Empty means Docker's own.
+readonly SECCOMP_PROFILE=""
 readonly DEFAULT_VOLUME="mql-compiler-cache"
 readonly EXIT_USAGE=2
 readonly FORWARDED_VARS=(MQL_COMPILER_MT4_URL MQL_COMPILER_MT5_URL MQL_COMPILER_INSTALL_TIMEOUT)
@@ -241,6 +246,12 @@ for var in "${FORWARDED_VARS[@]}"; do
         docker_args+=(-e "$var=${!var}")
     fi
 done
+
+profile="${MQL_COMPILER_SECCOMP:-$SECCOMP_PROFILE}"
+if [[ -n "$profile" ]]; then
+    [[ -f "$profile" ]] || fail "no such seccomp profile: $profile"
+    docker_args+=(--security-opt "seccomp=$profile")
+fi
 
 # The ${x[@]+...} form keeps an empty array safe under set -u on bash 3.2.
 exec docker run "${docker_args[@]}" "$image" ${args[@]+"${args[@]}"}

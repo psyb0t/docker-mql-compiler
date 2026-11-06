@@ -3,8 +3,6 @@
 Compile on every push, fail the job on errors, and get each error marked on its source line in the PR:
 
 ```yaml
-runs-on: ubuntu-24.04
-steps:
 - uses: actions/checkout@v6
 - uses: psyb0t/docker-mql-compiler@master
   with:
@@ -13,7 +11,7 @@ steps:
       MQL4/Indicators/Bands.mq4
 ```
 
-Run it on `ubuntu-24.04`, not `ubuntu-latest`. GitHub moved `ubuntu-latest` to Ubuntu 26.04, and on those runners Wine never finishes creating its prefix inside the container, so the first install hangs until the install timeout ends it. The repository's own CI has a diagnostics job on `ubuntu-26.04` for this.
+It runs on `ubuntu-latest`. That's Ubuntu 26.04 with Linux 7.0 now, where Docker's default seccomp filter refuses the `userfaultfd` call Wine makes at startup and Wine dies with `wine: socket : Function not implemented`. The action passes its own `seccomp/wine.json` (Docker's default profile plus `userfaultfd`), so you don't have to do a damn thing.
 
 | Input | Default | What it does |
 |---|---|---|
@@ -34,11 +32,12 @@ The command is just a thin `docker run`. Doing it yourself:
 # run from the folder that holds MQL5/
 docker run --rm --init \
   --user "$(id -u):$(id -g)" \
+  --security-opt seccomp=seccomp/wine.json \
   -v "$PWD":/src \
   -v mql-compiler-cache:/cache \
   psyb0t/mql-compiler:latest MQL5/Experts
 ```
 
-Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. An `-I` folder has to be mounted too. `--init` lets Ctrl-C reach the compiler, which `--watch` needs. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.
+Mount your sources at `/src` (the image's working folder, so relative paths start there) and keep `/cache` on a volume. Skip the volume and every single run reinstalls the whole toolchain, which gets old fast. The image only sees what you mount, so mount the `MQL4`/`MQL5` folder or its parent, never just `Experts`, or your `Include` stays outside. Add `-e MQL_COMPILER_MT4_URL=...` and `-e MQL_COMPILER_MT5_URL=...` for other installers. An `-I` folder has to be mounted too. `--init` lets Ctrl-C reach the compiler, which `--watch` needs. `--security-opt seccomp=...` points at a copy of this repo's `seccomp/wine.json`; on Linux older than 7.0 you can leave it out. The command does the same thing with each folder mounted at its own host path and `-w "$PWD"`, which is why its output shows your real paths.
 
 [Back to the README](../README.md).

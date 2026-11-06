@@ -63,8 +63,6 @@ The docs links are absolute so they work on Docker Hub too.
 ## GitHub Action
 
 ```yaml
-runs-on: ubuntu-24.04 # ubuntu-latest (26.04) hangs Wine, see the CI guide
-steps:
 - uses: actions/checkout@v6
 - uses: psyb0t/docker-mql-compiler@master
   with:

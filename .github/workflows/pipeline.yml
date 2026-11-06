@@ -24,10 +24,9 @@ jobs:
   # Builds the image and compiles the fixtures with it, which downloads and
   # installs the real MT4 and MT5 toolchains.
   test:
-    # Pinned: on the ubuntu-26.04 image that ubuntu-latest moved to, wineboot
-    # never finishes inside the container (the wine-on-ubuntu-26 job below
-    # shows why), so the first install cannot happen there.
-    runs-on: ubuntu-24.04
+    # ubuntu-latest is Ubuntu 26.04 with Linux 7.0, where Wine needs the
+    # seccomp profile in seccomp/wine.json; the tests and the Action pass it.
+    runs-on: ubuntu-latest
     # A passing run takes about six minutes, the first install included.
     # Without a limit, v0.5.1's runs sat in a first install that never
     # finished for six hours before GitHub cancelled them.
@@ -89,27 +88,6 @@ jobs:
           test "$BROKEN_OUTCOME" = failure
           test "$BROKEN_FAILED" = 1
           test "$BROKEN_COMPILED" = 1
-
-  # Diagnostics only: builds the image on ubuntu-26.04 and reports whether
-  # 32-bit programs run and where wineboot stops. It never blocks a release.
-  wine-on-ubuntu-26:
-    runs-on: ubuntu-26.04
-    continue-on-error: true
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Login to Docker Hub
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: scripts/ci-dockerhub-login.sh
-      - name: Build
-        run: make build
-      - name: Report
-        run: scripts/ci-wine-diagnostics.sh
 
   badges:
     if: github.ref_name == github.event.repository.default_branch || startsWith(github.ref, 'refs/tags/')

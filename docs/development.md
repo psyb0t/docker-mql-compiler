@@ -10,6 +10,7 @@ make sec        # gitleaks secrets scan, hadolint, grype vulnerability scan of t
 make install    # build :dev and install the command from this checkout
 make uninstall  # remove the installed command
 make version    # print the version; V=X.Y.Z sets it
+make seccomp    # regenerate seccomp/wine.json from Docker's pinned default profile plus userfaultfd
 make help       # every target
 ```
 
