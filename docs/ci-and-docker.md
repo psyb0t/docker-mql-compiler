@@ -3,6 +3,8 @@
 Compile on every push, fail the job on errors, and get each error marked on its source line in the PR:
 
 ```yaml
+runs-on: ubuntu-24.04
+steps:
 - uses: actions/checkout@v6
 - uses: psyb0t/docker-mql-compiler@master
   with:
@@ -10,6 +12,8 @@ Compile on every push, fail the job on errors, and get each error marked on its 
       MQL5/Experts
       MQL4/Indicators/Bands.mq4
 ```
+
+Run it on `ubuntu-24.04`, not `ubuntu-latest`. GitHub moved `ubuntu-latest` to Ubuntu 26.04, and on those runners Wine never finishes creating its prefix inside the container, so the first install hangs until the install timeout ends it. The repository's own CI has a diagnostics job on `ubuntu-26.04` for this.
 
 | Input | Default | What it does |
 |---|---|---|

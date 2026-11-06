@@ -2,6 +2,11 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.4, 2026-11-06
+
+- The GitHub Action needs an `ubuntu-24.04` runner for now. GitHub moved `ubuntu-latest` to Ubuntu 26.04, and on those runners Wine never finishes creating its prefix inside the container: v0.5.3's CI run showed `creating the Wine prefix did not finish waited=300s`. The README and the CI guide examples now set `runs-on: ubuntu-24.04`.
+- CI runs the tests on `ubuntu-24.04`, the image the last passing run used, so this release publishes the image that v0.5.2 and v0.5.3 could not. A separate CI job builds the image on `ubuntu-26.04` and prints the kernel, whether 32-bit programs run, and Wine's errors from `wineboot`; it never blocks a release.
+
 ## v0.5.3, 2026-11-06
 
 - v0.5.3 is the first published image with v0.5.2's fixes. v0.5.2's image was never published: its CI run stopped in the first install again and hit the test job's 30-minute limit, with no log to say where. The same tests pass from an empty cache on my machine, so the cause in CI is not known yet.
