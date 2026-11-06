@@ -12,6 +12,8 @@ readonly I386_IMAGE="i386/debian:trixie-slim@sha256:48a6ec1047c40f162d2766a08801
 readonly WINEBOOT_TIMEOUT_SECONDS=120
 readonly LOG_TAIL_LINES=40
 readonly ENOSYS_LINES=30
+# The strace run installs strace first; the whole container gets this long.
+readonly STRACE_CONTAINER_TIMEOUT_SECONDS=300
 
 # Runs wineboot --init in a fresh prefix inside the image, with any extra
 # docker run options given, and prints its exit status and the end of its log.
@@ -44,10 +46,11 @@ else
 fi
 
 wineboot_check "default seccomp"
+wineboot_check "seccomp=unconfined" --security-opt seccomp=unconfined
 
 echo "== system calls that failed with ENOSYS during wineboot (strace, default seccomp)"
 # Root inside this throwaway container only, to install strace.
-docker run --rm --user 0 --entrypoint bash -e WINEDEBUG=-all "$IMAGE" -c "
+timeout "$STRACE_CONTAINER_TIMEOUT_SECONDS" docker run --rm --init --user 0 --entrypoint bash -e WINEDEBUG=-all "$IMAGE" -c "
     apt-get update -qq >/dev/null 2>&1
     apt-get install -y -qq strace >/dev/null 2>&1 || { echo 'strace did not install'; exit 0; }
     export WINEPREFIX=/root/prefix
@@ -56,6 +59,4 @@ docker run --rm --user 0 --entrypoint bash -e WINEDEBUG=-all "$IMAGE" -c "
     timeout $WINEBOOT_TIMEOUT_SECONDS strace -f -o /tmp/trace.txt wineboot --init >/dev/null 2>&1
     echo \"wineboot exit=\$?\"
     grep ENOSYS /tmp/trace.txt | sed -E 's/^[0-9]+ +//; s/\\(.*= -1 ENOSYS/(...) = -1 ENOSYS/' | sort | uniq -c | sort -rn | head -n $ENOSYS_LINES
-" || echo "the strace container failed exit=$?"
-
-wineboot_check "seccomp=unconfined" --security-opt seccomp=unconfined
+" || echo "the strace container failed or ran out of time exit=$?"
