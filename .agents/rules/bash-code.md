@@ -10,7 +10,7 @@ Every script is Bash. `make lint` runs shellcheck, shfmt (`-i 4 -ci`) and hadoli
 - **SH2:** `make lint` passes with no new `# shellcheck disable`. If one is unavoidable, the comment next to it says why.
 - **SH3:** No magic numbers or strings in logic. Name them as `readonly` constants at the top of the file with a comment saying why the value is what it is (`STDLIB_UNPACK_TIMEOUT_SECONDS`, `SIGNATURE_ATTEMPTS`, `CRL_FETCH_FAILURE` in `entrypoint.sh`). Exit codes are the `EXIT_*` constants.
 - **SH4:** Use guard clauses and `continue` to keep the happy path unindented, as `collect_sources` and `build_merged_root` do.
-- **SH5:** Comments explain why, including the constraint or incident behind a choice (the `/inc` space limit, MetaEditor's backwards exit code, the CRL retry). Do not restate the code.
+- **SH5:** Comments explain why, including the constraint or incident behind a choice (the `/inc` space limit, MetaEditor's exit code that counts compiled files, the CRL retry). Do not restate the code.
 - **SH6:** `wrapper.sh` runs on users' machines, so it sticks to Bash 3.2 and coreutils that macOS also has: no associative arrays, no `${x,,}`, and empty arrays expanded as `${arr[@]+"${arr[@]}"}`. `entrypoint.sh` runs on Debian trixie and may use Bash 5 and GNU tools.
 
 ## Output and logging

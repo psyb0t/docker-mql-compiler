@@ -39,13 +39,14 @@
 #   MQL_COMPILER_VOLUME   toolchain volume name (default mql-compiler-cache)
 #   MQL_COMPILER_MT4_URL  MT4 installer to use instead of RoboForex's
 #   MQL_COMPILER_MT5_URL  MT5 installer to use instead of RoboForex's
+#   MQL_COMPILER_INSTALL_TIMEOUT  seconds one platform's install may take (default 600)
 set -euo pipefail
 
 # install.sh writes the image this command is pinned to.
 readonly PINNED_IMAGE="psyb0t/mql-compiler:latest"
 readonly DEFAULT_VOLUME="mql-compiler-cache"
 readonly EXIT_USAGE=2
-readonly FORWARDED_VARS=(MQL_COMPILER_MT4_URL MQL_COMPILER_MT5_URL)
+readonly FORWARDED_VARS=(MQL_COMPILER_MT4_URL MQL_COMPILER_MT5_URL MQL_COMPILER_INSTALL_TIMEOUT)
 readonly MQL_FOLDERS=(MQL4 MQL5)
 readonly FORMAT_JSON="json"
 

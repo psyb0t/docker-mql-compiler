@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.2, 2026-11-06
+
+- A first run installs a working toolchain again. Since MetaTrader 5 build 6304, a fresh install under the image's Wine 10 never finished: the terminal the installer leaves running stops at "A debugger has been found running in your system" and waits for a click forever, the standard library is never unpacked, and MetaEditor 6304's `/compile` exits with no result. The image now ships Wine 11.0 from WineHQ, which runs build 6304: a full first install takes about a minute. Caches installed before keep their MetaEditor builds; on older images, do not run `--update`, since it would install build 6304.
+- A platform's install now gives up after 600 seconds instead of waiting forever, and logs `installer did not finish`. `MQL_COMPILER_INSTALL_TIMEOUT` sets another limit in seconds (the command passes it to the image); a value that is not a whole number of seconds fails setup before anything is downloaded. Installer downloads stop after 300 seconds and are retried.
+- The v0.5.1 image was never published: its CI run hung in that first install for six hours until GitHub cancelled it. The test job now stops after 30 minutes.
+- The docs describe MetaEditor's exit code correctly: it is the number of files that compiled (1 for a good file, 0 for a failed one), not a reversed success flag.
+- The scheduled issue-pull workflow runs at times spread across the day.
+
 ## v0.5.1, 2026-10-17
 
 - The GitHub Action examples use `psyb0t/docker-mql-compiler@master`, the manual `docker run` example uses `psyb0t/mql-compiler:latest`, and the installation guide no longer names an old release as its example.

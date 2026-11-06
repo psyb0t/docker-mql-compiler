@@ -30,4 +30,4 @@ Prefix: ARC.
 - **ARC13:** Xvfb stays up for the whole run. The installers hand off to a child process that dies with the display.
 - **ARC14:** The cache is `/cache/uid-<UID>/` with `home`, `wine`, `installers` and `logs`, one folder per UID in one volume, because Wine refuses a prefix owned by another UID. `/cache` is mode 1777 in the image. `main` refuses a `uid-<UID>` folder owned by another UID before touching it. The run lock (ARC5) also keeps parallel first runs from installing twice.
 - **ARC15:** `wineserver -p` needs an existing prefix, so `keep_wineserver` runs after `ensure_toolchain`.
-- **ARC16:** The image is amd64 only. MT4's MetaEditor is 32-bit and needs `wine32:i386`.
+- **ARC16:** The image is amd64 only. MT4's MetaEditor is 32-bit and needs Wine's i386 half (`wine-stable-i386:i386`).

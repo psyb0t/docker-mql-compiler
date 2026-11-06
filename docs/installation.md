@@ -24,7 +24,8 @@ The `mql-compiler` command reads these:
 | `MQL_COMPILER_VOLUME` | `mql-compiler-cache` | Docker volume that holds the toolchain |
 | `MQL_COMPILER_MT4_URL` | RoboForex's MT4 installer | MT4 installer for the first run |
 | `MQL_COMPILER_MT5_URL` | RoboForex's MT5 installer | MT5 installer for the first run |
+| `MQL_COMPILER_INSTALL_TIMEOUT` | `600` | Seconds one platform's installer may run before setup gives up |
 
-The installer URLs only matter while the toolchain is being installed. To use another broker's installers, point `MQL_COMPILER_VOLUME` at a new volume name for that first run and keep using it. `docker volume rm mql-compiler-cache` works too, but it throws away every user's toolchain on the box.
+The installer URLs and the install timeout only matter while the toolchain is being installed. A normal install takes about a minute per platform; raise the timeout on a slow connection. To use another broker's installers, point `MQL_COMPILER_VOLUME` at a new volume name for that first run and keep using it. `docker volume rm mql-compiler-cache` works too, but it throws away every user's toolchain on the box.
 
 [Back to the README](../README.md).

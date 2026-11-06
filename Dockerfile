@@ -12,8 +12,21 @@ LABEL org.opencontainers.image.title="mql-compiler" \
       org.opencontainers.image.source="https://github.com/psyb0t/docker-mql-compiler" \
       org.opencontainers.image.licenses="WTFPL"
 
+# Wine comes from WineHQ, not Debian. MetaTrader 5 build 6304 refuses to run
+# under Debian's Wine 10.0: the terminal stops at "A debugger has been found
+# running in your system" and MetaEditor's /compile exits with no log. Wine
+# 11.0 runs both. The packages are pinned to one version, and WineHQ's signing
+# key to its checksum (fingerprint D43F 6401 4536 9C51 D786 DDEA 76F1 A20F
+# F987 672F).
+ARG WINE_VERSION=11.0.0.0~trixie-1
+ARG WINEHQ_SIGNER_SHA256=d965d646defe94b3dfba6d5b4406900ac6c81065428bf9d9303ad7a72ee8d1b8
+
+# The checksum check below pipes into sha256sum; a failed download must fail
+# the build, not just the last command of the pipe.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # MT4's MetaEditor is a 32-bit program, so Wine needs its i386 half too.
-# xvfb gives the installers and MetaEditor a display they never show.
+# xvfb gives the installers and the terminals a display they never show.
 # osslsigncode checks the installers' Authenticode signature before they run;
 # jq writes the JSON results and log lines; inotify-tools drives --watch.
 # hadolint ignore=DL3008
@@ -26,11 +39,25 @@ RUN dpkg --add-architecture i386 \
         jq \
         osslsigncode \
         procps \
-        wine \
-        wine32:i386 \
-        wine64 \
         xauth \
         xvfb \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL -o /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key \
+    && echo "$WINEHQ_SIGNER_SHA256  /etc/apt/keyrings/winehq-archive.key" | sha256sum -c - \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: https://dl.winehq.org/wine-builds/debian' \
+        'Suites: trixie' \
+        'Components: main' \
+        'Architectures: amd64 i386' \
+        'Signed-By: /etc/apt/keyrings/winehq-archive.key' \
+        >/etc/apt/sources.list.d/winehq-trixie.sources \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        "winehq-stable=$WINE_VERSION" \
+        "wine-stable=$WINE_VERSION" \
+        "wine-stable-amd64=$WINE_VERSION" \
+        "wine-stable-i386:i386=$WINE_VERSION" \
     && rm -rf /var/lib/apt/lists/*
 
 # Runs as any UID: the wrapper passes the caller's own so compiled files belong

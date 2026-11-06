@@ -25,6 +25,10 @@ jobs:
   # installs the real MT4 and MT5 toolchains.
   test:
     runs-on: ubuntu-latest
+    # A passing run takes about six minutes, the first install included.
+    # Without a limit, v0.5.1's runs sat in a first install that never
+    # finished for six hours before GitHub cancelled them.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:

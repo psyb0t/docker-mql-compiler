@@ -88,6 +88,15 @@ readonly CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 readonly XVFB_DISPLAY="${DISPLAY:-:99}"
 readonly DOWNLOAD_RETRIES=3
 readonly DOWNLOAD_RETRY_DELAY_SECONDS=5
+# The installers are a few MB; a transfer that takes longer than this has
+# stalled, and curl retries it.
+readonly DOWNLOAD_CONNECT_TIMEOUT_SECONDS=30
+readonly DOWNLOAD_MAX_SECONDS=300
+# The web installer downloads the terminal, then starts it with /install, and
+# neither has a time limit. A normal install takes about a minute. Under Wine
+# 10, MT5 build 6304's terminal stopped at a modal dialog, and v0.5.1's CI run
+# sat in the first install for six hours until GitHub cancelled the job.
+readonly INSTALL_TIMEOUT_SECONDS="${MQL_COMPILER_INSTALL_TIMEOUT:-600}"
 # The source files whose changes start another pass in --watch mode.
 readonly WATCHED_FILES='\.(mq4|mq5|mqh)$'
 readonly FORMAT_JSON="json"
@@ -421,8 +430,14 @@ require_signer() {
 install_platform() {
     local platform="$1" url="$2"
     local installer="$INSTALLER_DIR/$platform-setup.exe"
+    if [[ ! "$INSTALL_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+        log ERROR "MQL_COMPILER_INSTALL_TIMEOUT must be a whole number of seconds value=$INSTALL_TIMEOUT_SECONDS"
+        return 1
+    fi
     log INFO "downloading installer platform=$platform url=$url"
-    if ! curl -fsSL --retry "$DOWNLOAD_RETRIES" --retry-delay "$DOWNLOAD_RETRY_DELAY_SECONDS" -o "$installer.part" "$url"; then
+    if ! curl -fsSL --retry "$DOWNLOAD_RETRIES" --retry-delay "$DOWNLOAD_RETRY_DELAY_SECONDS" \
+        --connect-timeout "$DOWNLOAD_CONNECT_TIMEOUT_SECONDS" --max-time "$DOWNLOAD_MAX_SECONDS" \
+        -o "$installer.part" "$url"; then
         log ERROR "installer download failed platform=$platform url=$url"
         return 1
     fi
@@ -432,7 +447,12 @@ install_platform() {
     # The setup launcher hands off to a child and its exit code says nothing;
     # the MetaEditor check below is the verdict.
     wine "$installer" /auto >/dev/null 2>&1 || true
-    wineserver -w
+    if ! timeout "$INSTALL_TIMEOUT_SECONDS" wineserver -w; then
+        log ERROR "installer did not finish platform=$platform waited=${INSTALL_TIMEOUT_SECONDS}s"
+        # Stops the stuck installer so the run can end; its output is Wine noise.
+        wineserver -k >/dev/null 2>&1 || true
+        return 1
+    fi
     if [[ -z "$(find_installed_metaeditor "$platform")" ]]; then
         log ERROR "install finished without a MetaEditor platform=$platform"
         return 1
@@ -781,8 +801,9 @@ compile_one() {
     # writes no result.
     rm -f "$output"
 
-    # MetaEditor's exit code is backwards (1 usually means success); the log's
-    # Result line is the verdict, and its stderr is Wine noise.
+    # MetaEditor's exit code is the number of files it compiled (1 for a good
+    # file, 0 for a failed one), not an error code; the log's Result line is
+    # the verdict, and its stderr is Wine noise.
     wine "$editor" \
         "/compile:$(winepath -w "$STAGED_SOURCE")" \
         "/log:$(winepath -w "$log_file")" \

@@ -97,7 +97,7 @@ The terminal needs to have been started at least once, so it has unpacked its st
 
 Two runs at once take turns: they share one Wine install and one log file, so the second one logs that it's waiting and starts when the first is done. Handing everything to one run is faster.
 
-Paths with spaces work. MetaEditor itself chokes on them, so such a file gets compiled through a space-free link to its `MQL4`/`MQL5` folder (or its own folder, when it's loose), and the messages show your real paths again.
+Paths with spaces work. Passed to MetaEditor through Wine the way the script calls it, `/compile:` and `/inc:` choke on them, so such a file gets compiled through a space-free link to its `MQL4`/`MQL5` folder (or its own folder, when it's loose), and the messages show your real paths again.
 
 ### How your tree should look
 

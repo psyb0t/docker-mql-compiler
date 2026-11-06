@@ -15,7 +15,7 @@ Data flow: `mql-compiler` (host) -> `docker run` -> `entrypoint.sh` -> Wine -> M
 
 ## Stack
 
-- Bash scripts, a Debian trixie image with Wine 10 (64-bit and `wine32:i386`), Xvfb, osslsigncode, jq, inotify-tools.
+- Bash scripts, a Debian trixie image with Wine 11 from WineHQ (`winehq-stable`, 64-bit and `wine-stable-i386`, version and signing key pinned in the `Dockerfile`), Xvfb, osslsigncode, jq, inotify-tools.
 - No MetaQuotes software in the image or the repo: the first run downloads the RoboForex installers (or `MQL_COMPILER_MT4_URL`/`MQL_COMPILER_MT5_URL`), checks their Authenticode signature (trusted chain, signing certificate's CN starting with "MetaQuotes", see SEC1), and installs them with `/auto`.
 - CI: `.github/workflows/pipeline.yml` runs `make lint` and `make test-all`, then the action itself against the freshly built `:dev` image (`uses: ./`), then the reusable docker-image workflow (amd64 only, Grype scan) and, on tags, the ClawHub skill publish.
 
@@ -44,8 +44,8 @@ Every tool runs from a digest-pinned image. The maintainer cuts releases (DOC15 
 
 ## Landmines
 
-- MetaEditor's exit code is backwards (1 usually means success). The verdict is the `Result:` line of its UTF-16 log.
-- The MT4/MT5 setup launchers exit at once and hand off to a child. `wineserver -w` is what waits for the install, and Xvfb must stay up the whole time, or the child dies with the display.
+- MetaEditor's exit code is the number of files it compiled (1 for a good file, 0 for a failed one), not an error code. The verdict is the `Result:` line of its UTF-16 log.
+- The MT4/MT5 setup launchers exit at once and hand off to a child. `wineserver -w` is what waits for the install, and Xvfb must stay up the whole time, or the child dies with the display. The web installer starts the terminal with `/install` when it is done, and neither has a time limit, so `install_platform` runs that wait under `timeout` (`MQL_COMPILER_INSTALL_TIMEOUT`, 600 s) and stops the installer with `wineserver -k`: v0.5.1's CI run sat in the first install for six hours.
 - `wineserver -p` (kept alive for the compile loop) needs an existing prefix, so it starts only after setup.
 - Wine refuses a prefix owned by another UID. That is why the cache is per UID inside one volume, and why `/cache` is sticky and world-writable in the image.
 - `/inc:` takes the `MQL4`/`MQL5` folder itself, not its `Include` subfolder, and only one of them. It also breaks on a path with spaces (a mounted terminal's folder often has some). Hence the merged root in a staging folder under `/tmp`: `cp -rs` links of the standard `Include`, the user's `Include` linked over it with `--remove-destination` (user wins), and links to the user's other subfolders for `#resource`.
@@ -61,4 +61,5 @@ Every tool runs from a digest-pinned image. The maintainer cuts releases (DOC15 
 - Cached terminals are portable folders at `drive_c/terminals/mt4` and `mt5`, not under `Program Files`: `make_portable` moves the installed folder there after the standard library is unpacked, and the first run on an older cache does the same move with no download. `find_metaeditor` looks only in the platform's terminal folder; `find_installed_metaeditor` is only for finding the installer's folder to move.
 - Paths in the container must equal host paths for the output to make sense, which is why the wrapper mounts at the same path and passes `realpath`ed arguments. Mounting only `Experts` hides the user's `Include`.
 - The image is amd64 only: MT4's MetaEditor is 32-bit and needs Wine's i386 packages.
+- Debian's Wine 10.0 cannot run MetaTrader 5 build 6304 or later: the terminal stops at a modal "A debugger has been found running in your system" (so the installer's leftover `terminal64.exe /install` and `unpack_stdlib` wait forever) and MetaEditor's `/compile` exits 222 with no log. WineHQ's Wine 11.0 runs both. Raise `WINE_VERSION` in the `Dockerfile` only after a fresh install and `make test` pass on it.
 - Docker Hub: the reusable workflow needs `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Read, Write and Delete scope).

@@ -751,9 +751,10 @@ run_unit() {
 }
 
 test_units() {
-    log "unit checks inside the image: signature check, MetaEditor writing no result"
+    log "unit checks inside the image: signature check, MetaEditor writing no result, a stalled install"
     run_unit signature
     run_unit no-result
+    run_unit install-timeout
 }
 
 # The GitHub Action's script with GitHub's files and variables faked.
