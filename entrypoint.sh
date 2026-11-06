@@ -97,6 +97,9 @@ readonly DOWNLOAD_MAX_SECONDS=300
 # 10, MT5 build 6304's terminal stopped at a modal dialog, and v0.5.1's CI run
 # sat in the first install for six hours until GitHub cancelled the job.
 readonly INSTALL_TIMEOUT_SECONDS="${MQL_COMPILER_INSTALL_TIMEOUT:-600}"
+# Creating the Wine prefix takes seconds; a wineboot still running after this
+# is stuck.
+readonly WINE_BOOT_TIMEOUT_SECONDS=300
 # The source files whose changes start another pass in --watch mode.
 readonly WATCHED_FILES='\.(mq4|mq5|mqh)$'
 readonly FORMAT_JSON="json"
@@ -427,6 +430,24 @@ require_signer() {
     log INFO "installer signature ok signer=$SIGNER_PATTERN file=$name"
 }
 
+# Runs a Wine command, then waits for every Wine process it left behind, both
+# within one deadline of $1 seconds. Returns non-zero when the deadline passes,
+# after stopping whatever still runs. The command's output is Wine noise and
+# its exit code is not a verdict, so neither is kept.
+wine_within() {
+    local seconds="$1" deadline left
+    shift
+    deadline=$((SECONDS + seconds))
+    timeout "$seconds" "$@" >/dev/null 2>&1 || true
+    left=$((deadline - SECONDS))
+    if ((left > 0)) && timeout "$left" wineserver -w; then
+        return 0
+    fi
+    # Best effort: stops what is left so the run can end.
+    wineserver -k >/dev/null 2>&1 || true
+    return 1
+}
+
 install_platform() {
     local platform="$1" url="$2"
     local installer="$INSTALLER_DIR/$platform-setup.exe"
@@ -444,13 +465,11 @@ install_platform() {
     mv "$installer.part" "$installer"
     verify_installer "$installer" || return 1
     log INFO "installing platform=$platform (silent web install, about a minute)"
-    # The setup launcher hands off to a child and its exit code says nothing;
-    # the MetaEditor check below is the verdict.
-    wine "$installer" /auto >/dev/null 2>&1 || true
-    if ! timeout "$INSTALL_TIMEOUT_SECONDS" wineserver -w; then
+    # The setup launcher may return at once and hand off to a child, or stay
+    # until the install is done, so the deadline covers both. Its exit code
+    # says nothing; the MetaEditor check below is the verdict.
+    if ! wine_within "$INSTALL_TIMEOUT_SECONDS" wine "$installer" /auto; then
         log ERROR "installer did not finish platform=$platform waited=${INSTALL_TIMEOUT_SECONDS}s"
-        # Stops the stuck installer so the run can end; its output is Wine noise.
-        wineserver -k >/dev/null 2>&1 || true
         return 1
     fi
     if [[ -z "$(find_installed_metaeditor "$platform")" ]]; then
@@ -508,9 +527,11 @@ install_toolchain() {
     if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
         log INFO "creating the Wine prefix path=$WINEPREFIX"
         # wineboot prints first-run noise about missing Mono/Gecko, which a
-        # compiler does not need.
-        wineboot --init >/dev/null 2>&1
-        wineserver -w
+        # compiler does not need; wine_within drops it.
+        if ! wine_within "$WINE_BOOT_TIMEOUT_SECONDS" wineboot --init; then
+            log ERROR "creating the Wine prefix did not finish waited=${WINE_BOOT_TIMEOUT_SECONDS}s"
+            return 1
+        fi
     fi
     for platform in "${platforms[@]}"; do
         if [[ -n "$(mounted_terminal "$platform")" ]]; then

@@ -2,6 +2,12 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.3, 2026-11-06
+
+- v0.5.3 is the first published image with v0.5.2's fixes. v0.5.2's image was never published: its CI run stopped in the first install again and hit the test job's 30-minute limit, with no log to say where. The same tests pass from an empty cache on my machine, so the cause in CI is not known yet.
+- The install deadline now also covers the installer's launcher, which can stay running until the install ends, not only the wait after it. Creating the Wine prefix stops after 300 seconds. The download, the Wine prefix, the installer and the standard library unpack each have a time limit now, and each logs a line when it runs out.
+- CI stops the test step after 25 minutes and then prints the compiler's own log of the last run, so a failed or stuck setup shows where it stopped.
+
 ## v0.5.2, 2026-11-06
 
 - A first run installs a working toolchain again. Since MetaTrader 5 build 6304, a fresh install under the image's Wine 10 never finished: the terminal the installer leaves running stops at "A debugger has been found running in your system" and waits for a click forever, the standard library is never unpacked, and MetaEditor 6304's `/compile` exits with no result. The image now ships Wine 11.0 from WineHQ, which runs build 6304: a full first install takes about a minute. Caches installed before keep their MetaEditor builds; on older images, do not run `--update`, since it would install build 6304.

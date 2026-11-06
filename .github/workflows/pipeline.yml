@@ -40,7 +40,20 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: scripts/ci-dockerhub-login.sh
       - name: Test
+        # Below the job's limit, so a stuck run still leaves time for the log
+        # step after it.
+        timeout-minutes: 25
         run: make test-all
+      # The suite hides the compiler's stderr; its own copy of the last run is
+      # what says where a failed or stuck setup stopped.
+      - name: Show the compiler log
+        if: failure()
+        run: |
+          for log in .testing/cache/uid-*/logs/last-run.log; do
+            [ -f "$log" ] || continue
+            echo "== $log"
+            cat "$log"
+          done
       # The GitHub Action in this repository, run against the image make test
       # just built and the toolchain it installed.
       - name: Action compiles a good file

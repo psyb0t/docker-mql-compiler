@@ -1,10 +1,11 @@
 #!/bin/bash
-# install_platform when the installer never finishes: the wait for it gives
-# up after MQL_COMPILER_INSTALL_TIMEOUT seconds and setup fails, instead of
-# hanging until something outside kills the run. A value that is not a whole
-# number of seconds is refused before anything is installed. curl, the
-# signature check and wine are stubbed; wineserver is a fake on PATH, because
-# timeout runs it as a program.
+# install_platform when the installer never finishes: whether the setup
+# launcher itself never returns or the processes it leaves behind keep
+# running, the install gives up after MQL_COMPILER_INSTALL_TIMEOUT seconds and
+# setup fails, instead of hanging until something outside kills the run. A
+# value that is not a whole number of seconds is refused before anything is
+# installed. curl and the signature check are stubbed; wine and wineserver are
+# fakes on PATH, because timeout runs them as programs.
 
 # INSTALLER_DIR is read by the sourced entrypoint's functions.
 # shellcheck disable=SC2034
@@ -18,21 +19,32 @@ load_entrypoint
 
 FAKE_BIN="$(mktemp -d)"
 readonly FAKE_BIN
+WINE_RAN="$(mktemp)"
+readonly WINE_RAN
 readonly SLOWEST_ACCEPTABLE_SECONDS=20
 
-# The fake waits far longer than the timeout on -w and exits at once on -k.
-cat >"$FAKE_BIN/wineserver" <<'FAKE'
+# FAKE_WINE=hang makes the launcher never return; otherwise it returns at once.
+cat >"$FAKE_BIN/wine" <<'FAKE'
 #!/bin/bash
-if [[ "${1:-}" == "-w" ]]; then
-    sleep 300
+printf 'ran\n' >>"$WINE_RAN"
+if [[ "${FAKE_WINE:-}" == "hang" ]]; then
+    exec sleep 300
 fi
 exit 0
 FAKE
-chmod +x "$FAKE_BIN/wineserver"
-export PATH="$FAKE_BIN:$PATH"
+# FAKE_WINESERVER=idle makes -w return at once; otherwise -w never returns.
+cat >"$FAKE_BIN/wineserver" <<'FAKE'
+#!/bin/bash
+if [[ "${1:-}" == "-w" && "${FAKE_WINESERVER:-}" != "idle" ]]; then
+    exec sleep 300
+fi
+exit 0
+FAKE
+chmod +x "$FAKE_BIN/wine" "$FAKE_BIN/wineserver"
+export PATH="$FAKE_BIN:$PATH" WINE_RAN
 
 curl() {
-    # The last argument is the URL; -o names the file to write.
+    # -o names the file to write.
     local out=""
     while (($#)); do
         if [[ "$1" == "-o" ]]; then
@@ -48,39 +60,44 @@ verify_installer() {
     return 0
 }
 
-wine() {
-    # The setup launcher returns at once and leaves its child running.
-    :
-}
-
 INSTALLER_DIR="$(mktemp -d)"
 
-started=$SECONDS
-output="$(install_platform mt5 "https://example.invalid/mt5setup.exe" 2>&1)"
-status=$?
-elapsed=$((SECONDS - started))
+# Runs install_platform with the fakes as set in the environment and checks
+# that it gives up in time with the right log line.
+expect_gives_up() {
+    local case="$1" output status started elapsed
+    started=$SECONDS
+    output="$(install_platform mt5 "https://example.invalid/mt5setup.exe" 2>&1)"
+    status=$?
+    elapsed=$((SECONDS - started))
+    expect_equal "$case: the install fails" "$status" 1
+    expect_match "$case: the log says the installer did not finish" "$output" 'installer did not finish platform=mt5 waited=2s'
+    if ((elapsed < SLOWEST_ACCEPTABLE_SECONDS)); then
+        pass "$case: the install gives up after the timeout"
+        return
+    fi
+    fail "$case: the install gives up after the timeout" "took ${elapsed}s"
+}
 
-expect_equal "an installer that never finishes fails the install" "$status" 1
-expect_match "the log says the installer did not finish" "$output" 'installer did not finish platform=mt5 waited=2s'
-if ((elapsed < SLOWEST_ACCEPTABLE_SECONDS)); then
-    pass "the install gives up after the timeout"
-else
-    fail "the install gives up after the timeout" "took ${elapsed}s"
-fi
+export FAKE_WINE="" FAKE_WINESERVER=""
+expect_gives_up "an installer that never finishes"
+export FAKE_WINE="hang" FAKE_WINESERVER="idle"
+expect_gives_up "a launcher that never returns"
 
+: >"$WINE_RAN"
+export FAKE_WINE="" FAKE_WINESERVER="idle"
 refused="$(MQL_COMPILER_INSTALL_TIMEOUT=soon bash -c '
     source /unit/lib.sh
     load_entrypoint
     INSTALLER_DIR="$(mktemp -d)"
     curl() { :; }
     verify_installer() { return 0; }
-    wine() { echo "WINE RAN"; }
     install_platform mt5 "https://example.invalid/mt5setup.exe" 2>&1
     echo "status=$?"
 ')"
 expect_match "a timeout that is not a number is refused" "$refused" 'MQL_COMPILER_INSTALL_TIMEOUT must be a whole number of seconds value=soon'
 expect_match "a refused timeout fails the install" "$refused" 'status=1'
-if grep -q 'WINE RAN' <<<"$refused"; then
+if [[ -s "$WINE_RAN" ]]; then
     fail "a refused timeout starts no installer" "wine ran"
 else
     pass "a refused timeout starts no installer"
