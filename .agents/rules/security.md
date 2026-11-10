@@ -18,11 +18,10 @@ The image downloads and runs Windows executables from the internet and compiles 
 
 ## Pins and supply chain
 
-- **SEC7:** Pin every third-party dependency: the `debian:trixie-slim` base image by digest, the lint and scan images in the `Makefile` (shellcheck, shfmt, hadolint, gitleaks, grype) by version and digest, the base of `seccomp/wine.json` (Docker's default profile) by URL and checksum in the `Makefile`, and third-party GitHub Actions by commit SHA, in the workflows and in `action.yml` alike (`actions/cache`). Never loosen a pin. The maintainer's reusable workflows (`psyb0t/reusable-github-workflows/...@master`) are deliberately unpinned so a fix reaches every caller.
+- **SEC7:** Pins live in the `Dockerfile` (`debian:trixie-slim` by digest), the `Makefile` (the lint and scan images by version and digest, the base of `seccomp/wine.json`, Docker's default profile, by URL and checksum) and `action.yml` as well as the workflows (`actions/cache` by commit SHA). The maintainer's reusable workflows (`psyb0t/reusable-github-workflows/...@master`) are deliberately unpinned so a fix reaches every caller.
 - **SEC8:** `make sec` passes before a release: gitleaks on the working tree, hadolint at warning level, and grype on the image failing on fixed vulnerabilities at `GRYPE_SEVERITY` (high by default).
-- **SEC9:** Review an outside contribution's `Makefile`, `Dockerfile`, `.github/workflows/`, `install.sh`, `wrapper.sh`, `entrypoint.sh` and `tests/test.sh` changes before running any of it. `make test` and `make lint` run that code with Docker access. Read the diff first.
 - **SEC10:** New third-party components in the image are listed in `THIRD_PARTY.md` with their license.
 
 ## Secrets
 
-- **SEC11:** The project needs no credentials at run time. CI uses `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and the ClawHub token as GitHub secrets. Never print, commit or paste a secret, and never put a token in a URL, a test or a fixture. `.gitleaks.toml` allowlists only the ignored `.testing` and `.secaudit` directories; do not widen it.
+- **SEC11:** The project needs no credentials at run time. CI uses `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and the ClawHub token as GitHub secrets. `.gitleaks.toml` allowlists only the ignored `.testing` and `.secaudit` directories; do not widen it.

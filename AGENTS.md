@@ -67,7 +67,7 @@ make version V=X.Y.Z   # VERSION and .agents/.codex-plugin/plugin.json, no git
 make seccomp           # regenerate seccomp/wine.json from Docker's pinned default profile
 ```
 
-Check a docs change by building it with `make docs` and opening `.testing/docs-site`. The maintainer cuts releases (DOC15).
+Check a docs change by building it with `make docs` and opening `.testing/docs-site`.
 
 ## Landmines
 
@@ -100,10 +100,10 @@ Rules for every change live in `.agents/rules/`, one file per topic. Read the on
 | File | Prefix | Covers |
 | --- | --- | --- |
 | `architecture.md` | ARC | The three scripts and what each owns, the run order, mounts, the include root, the cache |
-| `bash-code.md` | SH | Bash style as practised here: strict mode, named constants, logging, stdout versus stderr, silenced commands |
-| `testing.md` | TST | The end-to-end suite, fixtures, regression tests, the test cache |
-| `security.md` | SEC | Installer signature checks, the container's privileges, pins, secrets, outside contributions |
-| `docs-and-releases.md` | DOC | Docs kept in step with code, the docs site, prose style, CHANGELOG, versions, tags, CI publishing |
+| `bash-code.md` | SH | Bash as practised here: the `ERR` trap, exit-code constants, Bash 3.2 in the wrapper, logging, stdout versus stderr |
+| `testing.md` | TST | The end-to-end suite, unit scripts, fixtures, the test cache |
+| `security.md` | SEC | Installer signature checks, the container's privileges, where pins live, CI secrets |
+| `docs-and-releases.md` | DOC | Which file owns which docs fact, the docs site, voice, CHANGELOG heading, `make version`, tags, CI publishing |
 | `chat.md` | CHAT | How an agent signs off its chat replies, PR, issue and discussion comments, messages and commit messages |
 
 Every rule starts with a bold ID: one prefix per file and a number counted from 1 in that file. Cite rules by ID (for example "TST3") in reviews, commits and code comments. IDs are never reused or renumbered: a removed rule's ID stays retired, and a new rule takes the next free number in its file. Where a test, lint or script enforces a rule, the rule names it. When a rule and the code disagree, the code and its tests win; fix the rule in the same change.

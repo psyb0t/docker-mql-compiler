@@ -19,27 +19,20 @@ Prefix: DOC.
   - internals and landmines: `AGENTS.md` and `.agents/rules/`;
   - Make targets, the test suite and CI: the `##` comments in the `Makefile` (`make help`) and `docs/development.md`.
 - **DOC2:** README, SKILL.md, `--help` and AGENTS.md must not contradict each other. When one changes a fact, check the other three for it.
-- **DOC3:** A changed project convention updates `AGENTS.md` or the matching file in `.agents/rules/` in the same change.
 
 ## Prose style
 
-- **DOC4:** No em dashes or en dashes anywhere: docs, README, CHANGELOG, rules, comments, commit messages, tag messages. Use a comma, a colon, parentheses or a new sentence.
-- **DOC5:** Plain, specific words. Say what happens with real file names, flags and numbers. No filler or marketing words ("leverage", "robust", "seamless", "delve", "powerful", "simply").
-- **DOC6:** Headings are sentence case. Each Markdown paragraph is one source line.
+- **DOC6:** Each Markdown paragraph is one source line.
 - **DOC7:** The README and the pages in `docs/` use a crude, joking voice; keep it when editing them. SKILL.md, its `references/installation.md`, AGENTS.md, the rules, the CHANGELOG and comments use a plain one.
-- **DOC8:** Anything written to other people (release notes, issue and PR replies) speaks as one person: "I", never "we", "our" or "the team".
 
 ## CHANGELOG and versions
 
-- **DOC9:** Every user-visible change gets a `CHANGELOG.md` entry. A new release goes at the top as `## vX.Y.Z, YYYY-MM-DD` followed by bullets written for the user: what they will see, then what changed. A fix says what went wrong and when before what happens now.
-- **DOC10:** Versions follow semver pre-1.0 as the CHANGELOG intro states: a patch for docs, build and fixes, a minor for new behaviour, with breaking changes called out.
+- **DOC9:** A `CHANGELOG.md` release heading is `## vX.Y.Z, YYYY-MM-DD`.
 - **DOC11:** `make version V=X.Y.Z` sets the version in `VERSION` and `.agents/.codex-plugin/plugin.json`. `.agents/.claude-plugin/plugin.json` has no version field.
 - **DOC12:** Each release is an annotated tag `vX.Y.Z` on the release commit. The tag message is the version on the first line, a blank line, then that release's CHANGELOG bullets.
 - **DOC13:** Every push runs `.github/workflows/pipeline.yml`: the `code` job (`make lint` and `make test-ci` through the reusable code workflow) and the `action` job (the Action in this repository against an image built from the commit). On `master`, the reusable docker-image workflow then builds and pushes `psyb0t/mql-compiler:latest` and `:sha-<commit>` (amd64 only, Grype scan reported to the Security tab). A `v*` tag runs no checks: it waits for that commit's `master` run to succeed (`wait`), promotes the same digest to `:vX.Y.Z` (`docker-promote`), cuts the GitHub release from the tag message (`release`), and then publishes the skill to ClawHub. `install.sh` pins the newest release tag, so a release is what users get.
-- **DOC14:** Commit subjects follow `type: summary` as in the history (`feat: ...`, `fix: ...`, `docs: ...`), with a body that explains what changed and why.
-- **DOC15:** The maintainer cuts releases; an agent working for the maintainer releases only through the maintainer's release tooling, never with raw `git commit`, `git push` or `git tag`. Contributors send pull requests and leave versions, tags and the CHANGELOG release heading to the maintainer. Never commit, tag, push, publish or touch issues unless the user asked for that specific action in the current turn, and never put `Closes #N`, `Fixes #N` or `Resolves #N` in a commit, PR or tag unless the user said to close that issue.
 
 ## Docs site
 
-- **DOC16:** `docs/` is the GitHub Pages site at https://psyb0t.github.io/docker-mql-compiler/, built from `master`'s `/docs` by Jekyll with the Just the Docs theme. Every page has front matter with a unique `title` and a one-sentence `description` of 50 to 170 characters, and one `#` heading. Pages link to each other with relative `.md` paths; files outside `docs/` are linked with full `https://github.com/psyb0t/docker-mql-compiler/blob/master/...` URLs, because a `../` link breaks on the site. The README links into the site with full site URLs, never with relative `docs/` paths, because Docker Hub shows the README too.
+- **DOC16:** `docs/` is the GitHub Pages site at https://psyb0t.github.io/docker-mql-compiler/, built from `master`'s `/docs` by Jekyll with the Just the Docs theme. Pages link to each other with relative `.md` paths; files outside `docs/` are linked with full `https://github.com/psyb0t/docker-mql-compiler/blob/master/...` URLs, because a `../` link breaks on the site. The README links into the site with full site URLs, never with relative `docs/` paths, because Docker Hub shows the README too.
 - **DOC17:** A docs change builds with `make docs` (GitHub Pages' own build image, output in `.testing/docs-site`) before it is called done, and a code block holding `{{` or `{%` is wrapped in `<!-- {% raw %} -->` and `<!-- {% endraw %} -->` so Liquid leaves it alone.

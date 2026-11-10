@@ -5,9 +5,7 @@ Prefix: TST.
 ## What every change needs
 
 - **TST1:** `make test` passes before a change is called done. It builds the image and runs `tests/test.sh`. CI runs `make test-ci`: `make test-all` under a 25-minute limit, printing the compiler's `last-run.log` when it fails. `make test-all` adds a real release install from Docker Hub (`MQL_COMPILER_TEST_RELEASE_INSTALL=1`); run it locally before changing `install.sh`. A change to any `.sh` file or the `Dockerfile` also needs `make lint`.
-- **TST2:** Every bug fix comes with a test that fails without the fix. The standard-library bug shipped in v0.1.x because no fixture used a standard header; a behaviour with no fixture is a behaviour nobody checked.
-- **TST3:** Every new behaviour of the command or the image (an option, a path rule, an include rule, an output format, an exit code) gets a test in `tests/test.sh` in the same change.
-- **TST4:** Tests name the behaviour they check (`"a user header replaces the MQL5 standard one"`, `"paths outside the current folder print absolute"`), so a failing line says what broke.
+- **TST3:** Tests of the command's and the image's behaviour (options, path rules, include rules, output formats, exit codes) go in `tests/test.sh`.
 
 ## How the suite works
 
@@ -18,4 +16,3 @@ Prefix: TST.
 - **TST7:** Fixtures under `tests/fixtures/` mirror a real tree: `MQL4/` and `MQL5/` with `Experts`, `Indicators`, `Scripts`, `Include` and `Files`, plus `loose/` outside both. A fixture that must fail or must prove an override says so in a comment at its top (`Broken.mq5`, `Override.mq5`, the shadowing `VirtualKeys.mqh` and `WinUser32.mqh`).
 - **TST8:** A fixture that proves an include or resource is used must fail to compile when it is missing (`Override.mq5` uses a macro only the user's header defines; the missing-resource test removes `MQL5/Files`). A test that passes either way proves nothing.
 - **TST9:** `.testing/cache` holds the installed toolchain between runs (about 2 GB, about 90 seconds to build). To test setup itself, remove only the part under test (for example the unpacked `MQL5`/`MQL4` directories in `wine/drive_c/terminals/mt5` or `mt4`, or a terminal directory moved back under `Program Files` to test the migration), not the whole cache, and list it before deleting. CI always starts from an empty cache, so it covers a full first run.
-- **TST10:** Test values are made up. No broker account, login or server appears in a fixture.
