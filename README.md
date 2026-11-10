@@ -1,25 +1,27 @@
-# docker-mql-compiler
+# mql-compiler
 
 [![CI](https://github.com/psyb0t/docker-mql-compiler/actions/workflows/pipeline.yml/badge.svg?branch=master)](https://github.com/psyb0t/docker-mql-compiler/actions/workflows/pipeline.yml)
 [![version](https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/badges/version.svg)](https://github.com/psyb0t/docker-mql-compiler/releases)
-[![license](https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/badges/license.svg)](LICENSE)
+[![license](https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/badges/license.svg)](https://github.com/psyb0t/docker-mql-compiler/blob/master/LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/psyb0t/mql-compiler?style=flat-square)](https://hub.docker.com/r/psyb0t/mql-compiler)
 
 Compile MQL4 and MQL5 on Linux without booting a goddamn Windows box. One command, and MetaQuotes' own MetaEditor wakes up inside a Wine container, chews through your `.mq4` and `.mq5` files, shits out `.ex4` and `.ex5` right next to them, and hands back every error as JSON your agent can actually use. Humans get `--text`.
 
 No Windows. No MetaTrader window to babysit. No broker account. No clicking "Compile" in a GUI that looks like it escaped from 2009.
+
 ## Quick start
 
 Docker must be running on an x86-64 (amd64) machine. There is no ARM image.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh \
+  | bash
 
-# Compile the sources under your current folder.
+# compile the sources under your current directory
 mql-compiler --text .
 ```
 
-The command lands in `~/.local/bin`. Add that folder to your `PATH` if the installer tells you to. The first compile downloads only the MT4 or MT5 toolchain your sources need, verifies its signature and caches it. Allow about a minute and a half for setup; later runs take seconds.
+The command lands in `~/.local/bin`. Add that directory to your `PATH` if the installer tells you to. The first compile downloads only the MT4 or MT5 toolchain your sources need, verifies its signature and caches it. Allow about a minute and a half for setup; later runs take seconds.
 
 A successful compile puts `Foo.ex4` or `Foo.ex5` beside `Foo.mq4` or `Foo.mq5`, owned by you. Fix any reported errors and run the command again. Exit `0` means every source compiled, `1` means at least one failed, and `2` means bad arguments or failed setup.
 
@@ -30,16 +32,16 @@ A successful compile puts `Foo.ex4` or `Foo.ex5` beside `Foo.mq4` or `Foo.mq5`, 
 
 ```bash
 mql-compiler MQL5/Experts/Scalper.mq5   # one source, JSON Lines by default
-mql-compiler --text MQL5 MQL4           # folders, both platforms
+mql-compiler --text MQL5 MQL4           # directories, both platforms
 mql-compiler --watch MQL5/Experts       # recompile on save until Ctrl-C
 mql-compiler --werror MQL5              # warnings fail the run
 mql-compiler -I ~/libs/mql5 MQL5        # shared headers outside your tree
 mql-compiler --mt5-terminal ~/mt5 MQL5  # use a portable terminal already on disk
-mql-compiler --version                 # image version and MetaEditor builds
-mql-compiler --update                  # reinstall the cached toolchain
+mql-compiler --version                  # image version and MetaEditor builds
+mql-compiler --update                   # reinstall the cached toolchain
 ```
 
-Keep sources under `MQL4` or `MQL5`, with your headers in that folder's `Include`. Standard headers work too. Your own headers win when they replace a standard one. Files, folders, mixed platforms and paths with spaces all work.
+Keep sources under `MQL4` or `MQL5`, with your headers in that directory's `Include`. Standard headers work too. Your own headers win when they replace a standard one. Files, directories, mixed platforms and paths with spaces all work.
 
 Without `--text`, stdout is JSON Lines: a `file` record for each source and a final `summary`. Progress goes to stderr. Scripts and agents should parse the JSON, not scrape the pretty output.
 
@@ -48,17 +50,18 @@ Without `--text`, stdout is JSON Lines: a `file` record for each source and a fi
 {"type":"summary","total":1,"compiled":1,"failed":0,"werror":false}
 ```
 
-## Where the fuck are the details?
+## Documentation
+
+The whole damn manual lives at **[psyb0t.github.io/docker-mql-compiler](https://psyb0t.github.io/docker-mql-compiler/)**.
 
 | You need | Read this |
 | --- | --- |
-| Install, upgrade, uninstall, choose installers or change the cache | [Installation and configuration](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/installation.md) |
-| Every option, result field, exit code, include rule and portable-terminal requirement | [Using mql-compiler](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/usage.md) |
-| Wine, signature checks, cache layout, mounts and how MetaEditor runs | [Architecture](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/architecture.md) |
-| GitHub Action inputs, outputs and running Docker by hand | [CI and Docker](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/ci-and-docker.md) |
-| Build, test, lint and contributor commands | [Development](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/development.md) |
-
-The docs links are absolute so they work on Docker Hub too.
+| Install, upgrade, uninstall, choose installers or change the cache | [Installation and configuration](https://psyb0t.github.io/docker-mql-compiler/installation/) |
+| Every option, result field, exit code, include rule and portable-terminal requirement | [Using mql-compiler](https://psyb0t.github.io/docker-mql-compiler/usage/) |
+| GitHub Action inputs, outputs and running Docker by hand | [GitHub Action and Docker](https://psyb0t.github.io/docker-mql-compiler/ci-and-docker/) |
+| Wine, signature checks, cache layout, mounts and how MetaEditor runs | [Architecture](https://psyb0t.github.io/docker-mql-compiler/architecture/) |
+| What an error message means and how to fix it | [Troubleshooting](https://psyb0t.github.io/docker-mql-compiler/troubleshooting/) |
+| Build, test, lint and contributor commands | [Development](https://psyb0t.github.io/docker-mql-compiler/development/) |
 
 ## GitHub Action
 
@@ -69,7 +72,7 @@ The docs links are absolute so they work on Docker Hub too.
     paths: MQL5/Experts
 ```
 
-Compilation errors fail the job and become annotations on the source lines. The [CI guide](https://github.com/psyb0t/docker-mql-compiler/blob/master/docs/ci-and-docker.md#github-action) covers includes, warnings, caching and result outputs.
+Compilation errors fail the job and become annotations on the source lines. The [Action guide](https://psyb0t.github.io/docker-mql-compiler/ci-and-docker/) covers includes, warnings, caching and result outputs.
 
 ## Agent integrations
 
@@ -81,8 +84,12 @@ Compilation errors fail the job and become annotations on the source lines. The 
 - [TeleTrade](https://my.teletrade-dj.com/agent_pp.html?agent_pp=26834897)
 - [FTMO](https://join.ftmo.com/uYaZPRmKowRZIKtuXdkE): prop firm with MT4 and MT5 support. Trading accounts use simulated capital.
 
+## Sponsor
+
+<a href="https://www.buymeacoffee.com/psyb0t"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-blue.png" alt="Buy Me a Coffee" height="60" width="217"></a>
+
 ## License
 
-[WTFPL](LICENSE). Do what the fuck you want.
+[WTFPL](https://github.com/psyb0t/docker-mql-compiler/blob/master/LICENSE). Do what the fuck you want.
 
-MetaTrader, MetaEditor and their installers are MetaQuotes software and none of it lives in this repo or the image. The first run downloads it from the broker, and MetaQuotes' license covers it. See [THIRD_PARTY.md](THIRD_PARTY.md).
+MetaTrader, MetaEditor and their installers are MetaQuotes software and none of it lives in this repo or the image. The first run downloads it from the broker, and MetaQuotes' license covers it. See [THIRD_PARTY.md](https://github.com/psyb0t/docker-mql-compiler/blob/master/THIRD_PARTY.md).

@@ -2,6 +2,12 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.6, 2026-11-10
+
+- The documentation is published at [psyb0t.github.io/docker-mql-compiler](https://psyb0t.github.io/docker-mql-compiler/), with a new troubleshooting page, and the README links to its pages instead of the files in `docs/`.
+- A push to `master` now also publishes `psyb0t/mql-compiler:sha-<commit>`, and a release tag no longer rebuilds the image: it waits for that commit's `master` run to pass and promotes the same image to `:vX.Y.Z`.
+- The funding links include Buy Me a Coffee, and `AGENTS.md` and the project rules in `.agents/rules/` for coding agents are rewritten.
+
 ## v0.5.5, 2026-11-06
 
 - The command and the GitHub Action work on Ubuntu 26.04 and other Linux 7.0 hosts again, `ubuntu-latest` runners included. There, Docker's default seccomp filter refuses `userfaultfd`, which Wine 11 calls while it starts, and Wine stopped with `wine: socket : Function not implemented` before the first install could begin. The command now runs its container with `seccomp/wine.json`: Docker's own default profile with that one call allowed. The installer puts the profile next to the command (`~/.local/share/mql-compiler/seccomp.json`, or `/usr/local/share/mql-compiler/seccomp.json` system wide) and `--uninstall` removes it; run the installer again to get it. `MQL_COMPILER_SECCOMP` points the command at another profile, and a path that does not exist is exit `2`. The Action passes its own copy, so `runs-on: ubuntu-24.04` is no longer needed. A manual `docker run` on such a host needs `--security-opt seccomp=seccomp/wine.json`.

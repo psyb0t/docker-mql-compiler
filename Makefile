@@ -22,8 +22,15 @@ RUN_AS_ME     := --user $$(id -u):$$(id -g)
 SECCOMP_BASE_URL    := https://raw.githubusercontent.com/moby/profiles/seccomp/v0.3.0/seccomp/default.json
 SECCOMP_BASE_SHA256 := 6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6
 SECCOMP_PROFILE     := seccomp/wine.json
+# A passing CI test run takes about six minutes, the first install included.
+# Without a limit, v0.5.1's runs sat in a first install that never finished
+# for six hours before GitHub cancelled them.
+TEST_CI_TIMEOUT     := 25m
+# GitHub Pages' own Jekyll build image, so the local site matches the live one.
+JEKYLL_IMAGE        := ghcr.io/actions/jekyll-build-pages:v1.0.13@sha256:6791ebfd912185ed59bfb5fb102664fa872496b79f87ff8b9cfba292a7345041
+DOCS_SITE           := .testing/docs-site
 
-.PHONY: help version build seccomp install uninstall test test-all lint format sec sec-secrets sec-image sec-dockerfile clean
+.PHONY: help version build seccomp install uninstall test test-all test-ci docs lint format sec sec-secrets sec-image sec-dockerfile clean
 
 help: ## Show the documented targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -57,8 +64,35 @@ uninstall: ## Remove the installed mql-compiler command (the toolchain volume is
 test: build ## Compile the fixtures with the built image (first run downloads the toolchain into .testing/cache)
 	IMAGE=$(IMAGE_NAME):$(DEV_TAG) TEST_CACHE=$(TEST_CACHE) bash tests/test.sh
 
-test-all: build ## make test plus a real release install from Docker Hub (replaces local psyb0t/mql-compiler release images; what CI runs)
+test-all: build ## make test plus a real release install from Docker Hub (replaces local psyb0t/mql-compiler release images; CI runs it through test-ci)
 	IMAGE=$(IMAGE_NAME):$(DEV_TAG) TEST_CACHE=$(TEST_CACHE) MQL_COMPILER_TEST_RELEASE_INSTALL=1 bash tests/test.sh
+
+# The suite hides the compiler's stderr; its own copy of the last run is what
+# says where a failed or stuck setup stopped, so print it when the run fails.
+test-ci: ## make test-all under a 25-minute limit, printing the compiler log on failure (what CI runs)
+	@status=0; \
+	timeout $(TEST_CI_TIMEOUT) $(MAKE) --no-print-directory test-all || status=$$?; \
+	if [ "$$status" -ne 0 ]; then \
+		for log in $(TEST_CACHE)/uid-*/logs/last-run.log; do \
+			[ -f "$$log" ] || continue; \
+			echo "== $$log"; \
+			cat "$$log"; \
+		done; \
+	fi; \
+	exit "$$status"
+
+docs: ## Build the documentation site into .testing/docs-site with GitHub Pages' Jekyll image
+	@mkdir -p "$(DOCS_SITE)"
+	docker run --rm \
+		--user "$$(id -u):$$(id -g)" \
+		-e HOME=/tmp \
+		-e GITHUB_WORKSPACE=/work \
+		-e GITHUB_REPOSITORY=psyb0t/docker-mql-compiler \
+		-e INPUT_SOURCE=docs \
+		-e INPUT_DESTINATION="$(DOCS_SITE)" \
+		-e INPUT_VERBOSE=false \
+		-v "$(CURDIR):/work" \
+		$(JEKYLL_IMAGE)
 
 lint: ## shellcheck + shfmt on the scripts, hadolint on the Dockerfile
 	docker run --rm -v "$(CURDIR)":/mnt:ro -w /mnt $(SHELLCHECK_IMAGE) $(SHELL_SCRIPTS)

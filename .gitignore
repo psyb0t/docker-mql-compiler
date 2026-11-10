@@ -13,6 +13,7 @@
 # Local tooling and agent scratch, never commit
 git-update.sh
 CODEX.local.md
+*.local.json
 ANUSTIMES.md
 PLAN.md
 NOTES.md
@@ -27,3 +28,4 @@ WIP.md
 .vscode/
 .idea/
 .envrc
+.telemetry/

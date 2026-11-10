@@ -1,63 +1,57 @@
 name: pipeline
 
+# Every branch push runs lint and the end-to-end tests (which install the real
+# MT4 and MT5 toolchains), and runs the GitHub Action in this repository
+# against a freshly built image. A push to master then builds the amd64 image
+# and publishes :latest and :sha-<commit>. A v* tag waits for that commit's
+# master run to succeed, promotes the same image digest to the release tag
+# without rebuilding, cuts the GitHub release, and publishes the skill to
+# ClawHub.
 on: [push]
 
+permissions: {}
+
 jobs:
-  # Docker Hub rate-limits anonymous pulls per runner IP, which the hosted
-  # runners share, and lint and test pull their tool images from there. The
-  # login script retries and falls back to anonymous pulls.
-  lint:
-    runs-on: ubuntu-latest
+  # Both targets run their tools in containers, so the runner needs only
+  # Docker, Make, Bash and jq. make test-ci is make test-all under a time
+  # limit, and it prints the compiler's last-run log when the suite fails.
+  code:
+    if: "!startsWith(github.ref, 'refs/tags/')"
     permissions:
       contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Login to Docker Hub
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: scripts/ci-dockerhub-login.sh
-      - name: Lint
-        run: make lint
+      security-events: write # the called workflow requests it for SARIF uploads
+    uses: psyb0t/reusable-github-workflows/.github/workflows/code-workflow.yml@master
+    with:
+      lint_command: "make lint" # shellcheck, shfmt, hadolint
+      test_command: "make test-ci"
 
-  # Builds the image and compiles the fixtures with it, which downloads and
-  # installs the real MT4 and MT5 toolchains.
-  test:
+  # The GitHub Action in this repository (uses: ./), run against an image
+  # built from this commit. make test covers action/run.sh with GitHub's files
+  # faked; this job covers action.yml itself.
+  action:
+    if: "!startsWith(github.ref, 'refs/tags/')"
     # ubuntu-latest is Ubuntu 26.04 with Linux 7.0, where Wine needs the
-    # seccomp profile in seccomp/wine.json; the tests and the Action pass it.
+    # seccomp profile in seccomp/wine.json; the Action passes it.
     runs-on: ubuntu-latest
-    # A passing run takes about six minutes, the first install included.
-    # Without a limit, v0.5.1's runs sat in a first install that never
-    # finished for six hours before GitHub cancelled them.
+    # Two first installs (MT5, then MT4) take a few minutes. Without a limit,
+    # v0.5.1's runs sat in a first install for six hours before GitHub
+    # cancelled them.
     timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # Docker Hub rate-limits anonymous pulls per runner IP, which the hosted
+      # runners share. The login script retries and falls back to anonymous
+      # pulls.
       - name: Login to Docker Hub
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: scripts/ci-dockerhub-login.sh
-      - name: Test
-        # Below the job's limit, so a stuck run still leaves time for the log
-        # step after it.
-        timeout-minutes: 25
-        run: make test-all
-      # The suite hides the compiler's stderr; its own copy of the last run is
-      # what says where a failed or stuck setup stopped.
-      - name: Show the compiler log
-        if: failure()
-        run: |
-          for log in .testing/cache/uid-*/logs/last-run.log; do
-            [ -f "$log" ] || continue
-            echo "== $log"
-            cat "$log"
-          done
-      # The GitHub Action in this repository, run against the image make test
-      # just built and the toolchain it installed.
+      - name: Build the image
+        run: make build
       - name: Action compiles a good file
         id: action_ok
         uses: ./
@@ -88,43 +82,94 @@ jobs:
           test "$BROKEN_OUTCOME" = failure
           test "$BROKEN_FAILED" = 1
           test "$BROKEN_COMPILED" = 1
+      # The compiler's own copy of the last run says where a failed or stuck
+      # setup stopped.
+      - name: Show the compiler log
+        if: failure()
+        run: |
+          for log in .testing/cache/uid-*/logs/last-run.log; do
+            [ -f "$log" ] || continue
+            echo "== $log"
+            cat "$log"
+          done
 
+  # Self-hosted version and license SVG badges on the badges branch.
   badges:
-    if: github.ref_name == github.event.repository.default_branch || startsWith(github.ref, 'refs/tags/')
+    needs: [code, wait]
+    if: "always() && ((github.ref_name == github.event.repository.default_branch && needs.code.result == 'success') || (startsWith(github.ref, 'refs/tags/') && needs.wait.result == 'success'))"
     permissions:
       contents: write
     uses: psyb0t/reusable-github-workflows/.github/workflows/create-badges.yml@master
 
+  # The called workflow builds only on master or tags, so other branches stop
+  # after the checks.
   call-docker-image-workflow:
-    needs: [lint, test]
+    needs: [code, action]
+    if: "!startsWith(github.ref, 'refs/tags/')"
     permissions:
-      contents: write # GitHub Release
+      contents: write # the called workflow's release job asks for it
       security-events: write # upload the Grype SARIF to the Security tab
     uses: psyb0t/reusable-github-workflows/.github/workflows/docker-image-workflow.yml@master
-
     with:
       repository_name: psyb0t/mql-compiler
       # MT4's MetaEditor is a 32-bit Windows program: the image needs Wine's
       # i386 half, which exists only on amd64.
       target_platforms: "linux/amd64"
+      push_sha_tag: true
       scan_severity: "high"
       cache_mode: "min"
-      # Report scan findings to the Security tab but don't fail the run, so the
-      # clawhub publish job below can depend on this workflow succeeding.
+      # Report scan findings to the Security tab without failing the run, so a
+      # tag release can still promote this build.
       scan_fail_build: false
-
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
 
-  # Publish the skill (.agents/skills/) to ClawHub. Tag pushes ONLY, and only
-  # after the Docker image build/push + GitHub release have succeeded.
-  publish-to-clawhub:
-    needs: [call-docker-image-workflow]
+  wait:
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      actions: read
+    uses: psyb0t/reusable-github-workflows/.github/workflows/wait-for-default-branch.yml@master
+
+  docker-promote:
+    needs: [wait]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      # The called workflow's release job asks for write even when
+      # create_release turns it off, and GitHub checks that up front.
+      contents: write
+      security-events: write
+    uses: psyb0t/reusable-github-workflows/.github/workflows/docker-image-workflow.yml@master
+    with:
+      repository_name: psyb0t/mql-compiler
+      target_platforms: "linux/amd64"
+      promote_on_tag: true
+      # The release job below cuts the release from the tag's own notes.
+      create_release: false
+      scan_severity: "high"
+      cache_mode: "min"
+      scan_fail_build: false
+    secrets:
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  release:
+    needs: [docker-promote]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    uses: psyb0t/reusable-github-workflows/.github/workflows/release-workflow.yml@master
+
+  # Publish the skill (.agents/skills/mql-compiler) to ClawHub once the release
+  # and the image it installs exist.
+  publish-to-clawhub:
+    needs: [release]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
     uses: psyb0t/reusable-github-workflows/.github/workflows/clawhub-publish.yml@master
     with:
-      publish_plugins: false
-
+      skill_names: '["mql-compiler"]'
+      plugin_names: "[]"
     secrets:
       clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
