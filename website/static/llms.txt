@@ -1,0 +1,11 @@
+# mql-compiler
+
+> Compile MQL4 and MQL5 sources on Linux with MetaQuotes' own MetaEditor running under Wine in Docker, with every compile error as JSON. No Windows, no terminal, no broker account.
+
+- [mql-compiler](https://psyb0t.github.io/docker-mql-compiler/): mql-compiler compiles MQL4 and MQL5 on Linux with MetaQuotes' MetaEditor under Wine in Docker, and reports every compile error as JSON.
+- [Installation and configuration](https://psyb0t.github.io/docker-mql-compiler/installation/): Install, upgrade and uninstall the mql-compiler command, pick per-user or system-wide installs, and set its MQL_COMPILER_* environment variables.
+- [Using mql-compiler](https://psyb0t.github.io/docker-mql-compiler/usage/): Every mql-compiler option, the JSON Lines result records, exit codes, include and #resource rules, watch mode and bringing your own terminal.
+- [GitHub Action and Docker](https://psyb0t.github.io/docker-mql-compiler/ci-and-docker/): Compile MQL4 and MQL5 in GitHub Actions with the mql-compiler action, its inputs and outputs, and run the psyb0t/mql-compiler image by hand.
+- [Architecture](https://psyb0t.github.io/docker-mql-compiler/architecture/): How the mql-compiler image runs MetaEditor under Wine: the signature check, the per-UID toolchain cache, the mounts and the seccomp profile.
+- [Troubleshooting](https://psyb0t.github.io/docker-mql-compiler/troubleshooting/): What each mql-compiler error message means and how to fix it: Docker problems, failed toolchain setup, seccomp, missing paths, includes and MetaEditor crashes.
+- [Development](https://psyb0t.github.io/docker-mql-compiler/development/): Build, test and lint mql-compiler from a checkout with Make and Docker, build this documentation site, and see what the CI pipeline runs.

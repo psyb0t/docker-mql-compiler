@@ -1,7 +1,6 @@
 ---
 title: "Using mql-compiler"
 description: "Every mql-compiler option, the JSON Lines result records, exit codes, include and #resource rules, watch mode and bringing your own terminal."
-nav_order: 3
 ---
 
 # Using the damn thing
@@ -36,7 +35,7 @@ mql-compiler --help
 
 ## What happens when you run it
 
-1. **Paths get checked and mounted.** Every argument is a file or a directory, relative or absolute, anywhere on the box. No arguments means the current directory, so don't run it bare from your home directory unless you want all of it scanned (from `/` it refuses outright). A path that doesn't exist kills the run with exit `2` before anything compiles. The command mounts what's needed (see [the mounts](architecture.md#how-the-sausage-gets-made)) and starts **one** container for the whole run.
+1. **Paths get checked and mounted.** Every argument is a file or a directory, relative or absolute, anywhere on the box. No arguments means the current directory, so don't run it bare from your home directory unless you want all of it scanned (from `/` it refuses outright). A path that doesn't exist kills the run with exit `2` before anything compiles. The command mounts what's needed (see [the mounts](architecture.md)) and starts **one** container for the whole run.
 2. **The file list gets built.** A file is taken as is; a symlink is followed, and its output lands next to the real file. A directory is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order you gave them, and a file that shows up twice (named directly and through its directory) stays in its first spot only. Naming a `.mqh` or any other non-source file directly is exit `2`; inside a directory those are just skipped. A directory with no sources at all is exit `2` too.
 3. **The toolchain gets checked.** On the very first run this is where MT4 and MT5 get installed (about a minute and a half), and only the ones your sources need: a run of nothing but `.mq5` files installs just MT5, and a platform you handed your own terminal for never gets downloaded at all. After that it's a quick look at the cache.
 4. **Files compile one at a time, never in parallel,** in the order from step 2, MT4 and MT5 files mixed. **The extension alone picks the compiler:** `.mq4` goes to MT4's `metaeditor.exe`, `.mq5` to MT5's `MetaEditor64.exe`. The directory a file sits in doesn't change that. It only decides which `Include` the file sees: a `.mq4` looks for the nearest directory called `MQL4` above it, a `.mq5` for the nearest `MQL5` (any case, `mql5` works too). So a `.mq4` dumped inside `MQL5/Experts` still compiles with MT4, but it won't see `MQL5/Include`.

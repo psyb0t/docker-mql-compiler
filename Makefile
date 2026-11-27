@@ -26,11 +26,17 @@ SECCOMP_PROFILE     := seccomp/wine.json
 # Without a limit, v0.5.1's runs sat in a first install that never finished
 # for six hours before GitHub cancelled them.
 TEST_CI_TIMEOUT     := 25m
-# GitHub Pages' own Jekyll build image, so the local site matches the live one.
-JEKYLL_IMAGE        := ghcr.io/actions/jekyll-build-pages:v1.0.13@sha256:6791ebfd912185ed59bfb5fb102664fa872496b79f87ff8b9cfba292a7345041
-DOCS_SITE           := .testing/docs-site
+# Docusaurus builds docs/ into website/build (gitignored). The Node image is
+# pinned by digest; pnpm refuses packages younger than the age gate in
+# website/pnpm-workspace.yaml.
+DOCS_NODE_IMAGE     := node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+DOCS_CACHE          := .testing/docs-cache
+DOCS_RUN            := docker run --rm --init --cap-drop ALL --security-opt no-new-privileges:true \
+	$(RUN_AS_ME) -e HOME=/tmp -e COREPACK_HOME=/cache/corepack \
+	-v "$(CURDIR)/$(DOCS_CACHE):/cache" \
+	-v "$(CURDIR)/docs:/work/docs:ro" -v "$(CURDIR)/website:/work/website" -w /work/website
 
-.PHONY: help version build seccomp install uninstall test test-all test-ci docs lint format sec sec-secrets sec-image sec-dockerfile clean
+.PHONY: help version build seccomp install uninstall test test-all test-ci docs docs-build docs-lock lint format sec sec-secrets sec-image sec-dockerfile clean
 
 help: ## Show the documented targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -81,18 +87,19 @@ test-ci: ## make test-all under a 25-minute limit, printing the compiler log on 
 	fi; \
 	exit "$$status"
 
-docs: ## Build the documentation site into .testing/docs-site with GitHub Pages' Jekyll image
-	@mkdir -p "$(DOCS_SITE)"
-	docker run --rm \
-		--user "$$(id -u):$$(id -g)" \
-		-e HOME=/tmp \
-		-e GITHUB_WORKSPACE=/work \
-		-e GITHUB_REPOSITORY=psyb0t/docker-mql-compiler \
-		-e INPUT_SOURCE=docs \
-		-e INPUT_DESTINATION="$(DOCS_SITE)" \
-		-e INPUT_VERBOSE=false \
-		-v "$(CURDIR):/work" \
-		$(JEKYLL_IMAGE)
+docs: docs-build ## Build the documentation site into website/build with Docusaurus
+
+# The install step downloads the locked packages; the build itself runs with
+# no network, and fails on a broken link or anchor.
+docs-build: | $(DOCS_CACHE)
+	$(DOCS_RUN) $(DOCS_NODE_IMAGE) corepack pnpm install --frozen-lockfile --ignore-scripts --store-dir /cache/pnpm
+	$(DOCS_RUN) --network none $(DOCS_NODE_IMAGE) corepack pnpm run build
+
+docs-lock: | $(DOCS_CACHE) ## Refresh website/pnpm-lock.yaml from website/package.json
+	$(DOCS_RUN) $(DOCS_NODE_IMAGE) corepack pnpm install --lockfile-only --ignore-scripts --store-dir /cache/pnpm
+
+$(DOCS_CACHE):
+	mkdir -p "$@"
 
 lint: ## shellcheck + shfmt on the scripts, hadolint on the Dockerfile
 	docker run --rm -v "$(CURDIR)":/mnt:ro -w /mnt $(SHELLCHECK_IMAGE) $(SHELL_SCRIPTS)

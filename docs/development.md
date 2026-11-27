@@ -1,7 +1,6 @@
 ---
 title: "Development"
 description: "Build, test and lint mql-compiler from a checkout with Make and Docker, build this documentation site, and see what the CI pipeline runs."
-nav_order: 7
 ---
 
 # Development
@@ -18,7 +17,8 @@ make install    # build :dev and install the command from this checkout
 make uninstall  # remove the installed command
 make version    # print the version; V=X.Y.Z sets it
 make seccomp    # regenerate seccomp/wine.json from Docker's pinned default profile plus userfaultfd
-make docs       # build this documentation site into .testing/docs-site
+make docs       # build this documentation site into website/build
+make docs-lock  # refresh website/pnpm-lock.yaml after changing website/package.json
 make help       # every target
 ```
 
@@ -42,4 +42,4 @@ Every push runs [`.github/workflows/pipeline.yml`](https://github.com/psyb0t/doc
 
 ## Documentation
 
-This site is the `docs/` directory, built by GitHub Pages with Jekyll and the Just the Docs theme. Every page needs front matter with a `title` and a one-sentence `description`. Link between pages with relative `.md` paths, and link files outside `docs/` with full `https://github.com/psyb0t/docker-mql-compiler/blob/master/...` URLs, because a `../` link breaks on the site. `make docs` builds the site with GitHub's own build image into `.testing/docs-site`, so you can check a change before pushing it.
+This site is the `docs/` directory, built with Docusaurus from the setup in `website/`, and the docs workflow publishes it to GitHub Pages. Every page needs front matter with a `title` and a one-sentence `description`, and an entry in `website/sidebars.mjs` and `website/static/llms.txt`. Link between pages with relative `.md` paths, and link files outside `docs/` with full `https://github.com/psyb0t/docker-mql-compiler/blob/master/...` URLs, because a `../` link breaks on the site. `make docs` builds the site into `website/build` in a pinned Node container and fails on a broken link or anchor, so you can check a change before pushing it.

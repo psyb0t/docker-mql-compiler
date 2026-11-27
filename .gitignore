@@ -29,3 +29,8 @@ WIP.md
 .idea/
 .envrc
 .telemetry/
+
+# Documentation site build output
+/website/node_modules/
+/website/.docusaurus/
+/website/build/

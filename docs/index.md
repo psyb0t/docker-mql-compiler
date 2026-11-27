@@ -1,10 +1,7 @@
 ---
 title: "Home"
 description: "mql-compiler compiles MQL4 and MQL5 on Linux with MetaQuotes' MetaEditor under Wine in Docker, and reports every compile error as JSON."
-nav_order: 1
-permalink: /
-seo:
-  type: WebSite
+slug: /
 ---
 
 # mql-compiler

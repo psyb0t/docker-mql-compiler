@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.7, 2026-11-27
+
+- The agent skill now states its safety limits. The container runs as the caller's user without extra privileges or the Docker socket, and mounts only the directories named on the command line, with `--mt4-terminal` and `--mt5-terminal` directories read-only. The first compile downloads the MT4 and MT5 installers and checks their MetaQuotes signature. The skill tells agents to download `install.sh`, read it and then run it instead of piping it into a shell, to use the per-user install unless asked otherwise, and to uninstall or remove the toolchain volume only when the user asks. Its frontmatter declares the network, shell and filesystem use, and the last-run log command uses `busybox:1.37.0` with the volume mounted read-only.
+- The copy of the skill published to ClawHub names the exact release image by digest, and its raw GitHub links to `master` point at the release tag. The repository files keep `latest` and `master`.
+- The documentation site is built with Docusaurus instead of Jekyll, at the same page addresses. `make docs` builds it in a pinned Node container and fails on a broken link or anchor, `make docs-lock` refreshes its lockfile, and a docs workflow publishes it to GitHub Pages.
+- A tag's image promotion no longer repeats the vulnerability scan or the Docker Hub description update that the `master` run already did, and the image job states its Docker Hub visibility and description settings.
+- The rules in `.agents/rules/` keep only conventions specific to this repository.
+
 ## v0.5.6, 2026-11-10
 
 - The documentation is published at [psyb0t.github.io/docker-mql-compiler](https://psyb0t.github.io/docker-mql-compiler/), with a new troubleshooting page, and the README links to its pages instead of the files in `docs/`.

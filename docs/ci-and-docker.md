@@ -1,7 +1,6 @@
 ---
 title: "GitHub Action and Docker"
 description: "Compile MQL4 and MQL5 in GitHub Actions with the mql-compiler action, its inputs and outputs, and run the psyb0t/mql-compiler image by hand."
-nav_order: 4
 ---
 
 # GitHub Action

@@ -23,8 +23,8 @@ Data flow: `mql-compiler` (host) -> `docker run` -> `entrypoint.sh` -> Wine -> M
 
 - Bash scripts, a Debian trixie image with Wine 11 from WineHQ (`winehq-stable`, 64-bit and `wine-stable-i386`, version and signing key pinned in the `Dockerfile`), Xvfb, osslsigncode, jq, inotify-tools.
 - No MetaQuotes software in the image or the repo: the first run downloads the RoboForex installers (or `MQL_COMPILER_MT4_URL`/`MQL_COMPILER_MT5_URL`), checks their Authenticode signature (trusted chain, signing certificate's CN starting with "MetaQuotes", see SEC1), and installs them with `/auto`.
-- Lint, scan and docs tools run from digest-pinned images in the `Makefile`: shellcheck, shfmt, hadolint, gitleaks, grype, and GitHub Pages' Jekyll build image.
-- Docs: `docs/` is a GitHub Pages site (Jekyll, Just the Docs `v0.12.0` remote theme, the bundled `mocha` color scheme in `docs/_sass/`).
+- Lint, scan and docs tools run from digest-pinned images in the `Makefile`: shellcheck, shfmt, hadolint, gitleaks, grype, and the Node image that builds the docs site.
+- Docs: `docs/` holds the pages, built by the Docusaurus site in `website/` and published to GitHub Pages by `.github/workflows/docs.yml`.
 - CI: `.github/workflows/pipeline.yml` calling `psyb0t/reusable-github-workflows`. Every push runs `make lint` and `make test-ci` (the `code` job) and the Action itself against a freshly built image (the `action` job, `uses: ./`). A `master` push then builds and pushes `:latest` and `:sha-<commit>` (amd64 only, Grype scan reported to the Security tab). A `v*` tag waits for that commit's `master` run, promotes the same digest to `:vX.Y.Z`, cuts the GitHub release from the tag message, and publishes the skill to ClawHub.
 
 ## Layout
@@ -62,12 +62,13 @@ make test-ci           # make test-all under a 25-minute limit, prints the compi
 make lint              # shellcheck, shfmt (-i 4 -ci), hadolint
 make sec               # gitleaks, hadolint, grype
 make install           # :dev image + command from this checkout
-make docs              # build the documentation site into .testing/docs-site
+make docs              # build the documentation site into website/build
+make docs-lock         # refresh website/pnpm-lock.yaml
 make version V=X.Y.Z   # VERSION and .agents/.codex-plugin/plugin.json, no git
 make seccomp           # regenerate seccomp/wine.json from Docker's pinned default profile
 ```
 
-Check a docs change by building it with `make docs` and opening `.testing/docs-site`.
+Check a docs change by building it with `make docs`, which fails on a broken link or anchor.
 
 ## Landmines
 
@@ -91,7 +92,7 @@ Check a docs change by building it with `make docs` and opening `.testing/docs-s
 - Under Linux 7.0 (Ubuntu 26.04, GitHub's `ubuntu-latest`), Docker's default seccomp filter refuses `userfaultfd`, which Wine 11 calls at startup, and Wine stops with `wine: socket : Function not implemented`. `seccomp/wine.json` is Docker's default profile plus that call (`make seccomp`, base pinned by checksum). The wrapper passes it as `--security-opt seccomp=` (`SECCOMP_PROFILE`, written by `install.sh` like `PINNED_IMAGE`, or `MQL_COMPILER_SECCOMP`), `action/run.sh` points the wrapper at the action's own copy, and every container `tests/test.sh` starts gets it.
 - Debian's Wine 10.0 cannot run MetaTrader 5 build 6304 or later: the terminal stops at a modal "A debugger has been found running in your system" (so the installer's leftover `terminal64.exe /install` and `unpack_stdlib` wait forever) and MetaEditor's `/compile` exits 222 with no log. WineHQ's Wine 11.0 runs both. Raise `WINE_VERSION` in the `Dockerfile` only after a fresh install and `make test` pass on it.
 - The reusable code workflow runs `make lint` and `make test-ci` with no secrets, so those pulls from Docker Hub are anonymous. The `action` job and the image workflow log in with `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (the image workflow needs Read, Write and Delete scope).
-- Jekyll runs Liquid over every page in `docs/`, so a `${{ ... }}` workflow expression in a code block renders as nothing. Wrap such a block in `<!-- {% raw %} -->` and `<!-- {% endraw %} -->`.
+- The docs build treats `docs/*.md` as plain Markdown, not MDX, so `{{ }}` in a code block is safe. A heading's own page title has no anchor: link to the page, not to its first `#` heading.
 
 ## Rules
 

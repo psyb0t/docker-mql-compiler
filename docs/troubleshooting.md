@@ -1,7 +1,6 @@
 ---
 title: "Troubleshooting"
 description: "What each mql-compiler error message means and how to fix it: Docker problems, failed toolchain setup, seccomp, missing paths, includes and MetaEditor crashes."
-nav_order: 6
 ---
 
 # Troubleshooting

@@ -1,7 +1,6 @@
 ---
 title: "Installation and configuration"
 description: "Install, upgrade and uninstall the mql-compiler command, pick per-user or system-wide installs, and set its MQL_COMPILER_* environment variables."
-nav_order: 2
 ---
 
 # Installation and configuration
@@ -59,7 +58,7 @@ The `mql-compiler` command reads these:
 | `MQL_COMPILER_INSTALL_TIMEOUT` | `600` | Seconds one platform's installer may run before setup gives up |
 | `MQL_COMPILER_SECCOMP` | the installed `seccomp.json` | Seccomp profile passed to `docker run`; a path that doesn't exist is exit `2` |
 
-The installer URLs and the install timeout only matter while the toolchain is being installed. A normal install takes about a minute per platform; raise the timeout on a slow connection. Any installer still has to pass the MetaQuotes signature check described in [the architecture page](architecture.md#how-the-sausage-gets-made).
+The installer URLs and the install timeout only matter while the toolchain is being installed. A normal install takes about a minute per platform; raise the timeout on a slow connection. Any installer still has to pass the MetaQuotes signature check described in [the architecture page](architecture.md).
 
 To use another broker's installers, point `MQL_COMPILER_VOLUME` at a new volume name for that first run and keep using it. `docker volume rm mql-compiler-cache` works too, but it throws away every user's toolchain on the box.
 

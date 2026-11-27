@@ -1,7 +1,6 @@
 ---
 title: "Architecture"
 description: "How the mql-compiler image runs MetaEditor under Wine: the signature check, the per-UID toolchain cache, the mounts and the seccomp profile."
-nav_order: 5
 ---
 
 # How the sausage gets made

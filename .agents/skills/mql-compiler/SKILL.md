@@ -1,60 +1,76 @@
 ---
 name: mql-compiler
-description: "Compile MQL4 (.mq4) and MQL5 (.mq5) sources to .ex4/.ex5 on Linux with the mql-compiler command, and read its compile errors."
+description: "Compile MQL4 (.mq4) and MQL5 (.mq5) sources to .ex4/.ex5 on Linux with the mql-compiler command, which runs MetaQuotes' MetaEditor under Wine in a Docker container, and read its compile errors. Also covers installing, upgrading and uninstalling the command. Use when the user wants to compile MetaTrader expert advisors, indicators, scripts or libraries without Windows."
 homepage: https://github.com/psyb0t/docker-mql-compiler
 user-invocable: true
 metadata:
-  { "openclaw": { "emoji": "🛠️", "requires": { "bins": ["docker"] } } }
+  { "openclaw": { "emoji": "🛠️", "requires": { "bins": ["docker", "curl"] } } }
+permissions:
+  network: "Docker pulls psyb0t/mql-compiler from Docker Hub. The installer asks api.github.com for the newest release and downloads the command and its seccomp profile from raw.githubusercontent.com. The first compile downloads the MT4 and MT5 installers from download.mql5.com (or the URLs in MQL_COMPILER_MT4_URL and MQL_COMPILER_MT5_URL) and checks their MetaQuotes signature. No source code is sent anywhere."
+  shell: "The mql-compiler command, which runs docker, and the installer script (bash install.sh) once the user has read it. Reading the last-run log uses one docker run of a pinned busybox image."
+  filesystem: "Reads the .mq4/.mq5 sources and include directories you name. Writes the .ex4/.ex5 next to each source. The installer writes the command and its seccomp.json under ~/.local (or /usr/local with the optional --system) and its log to mql-compiler-install.log in $TMPDIR (default /tmp). The toolchain lives in the mql-compiler-cache Docker volume."
 ---
 
 # mql-compiler
 
 `mql-compiler` compiles MetaTrader sources with MetaQuotes' own MetaEditor, running under Wine in the `psyb0t/mql-compiler` Docker image. It needs Docker on an x86-64 (amd64) machine and nothing else: no Windows, no MetaTrader terminal, no trading account. There is no ARM image.
 
+## Security & safety
+
+- The container runs as the caller's user and group IDs, with Docker's default seccomp profile plus the one extra call Wine needs. It is not privileged and gets no Docker socket. It mounts the directories you name, each source's `MQL4`/`MQL5` directory and the `mql-compiler-cache` volume. Terminal directories passed with `--mt4-terminal`/`--mt5-terminal` are mounted read-only.
+- Nothing is written into your tree except the `.ex4`/`.ex5` next to each source.
+- The first compile downloads the MT4 and MT5 setup programs and installs them inside the volume, after checking that they are signed by MetaQuotes. A different installer URL still has to pass that check.
+- Install by downloading `install.sh`, reading it, then running it. Do not pipe it into a shell. The installer also fetches `wrapper.sh` and `seccomp/wine.json` from the same repository and pulls the pinned image.
+- Remove the `mql-compiler-cache` volume, or uninstall the command, only when the user asks for that. The volume holds the toolchain of every user on the machine, and rebuilding it is a full download.
+- `--system` installs, which need root, are optional. Use the per-user install unless the user asks for a system-wide one.
+
 ## Install
 
-If `mql-compiler` is not on `PATH`, install it for the current user:
+If `mql-compiler` is not on `PATH`, install it for the current user. Download the installer, read it, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/psyb0t/docker-mql-compiler/master/install.sh \
+  -o /tmp/mql-compiler-install.sh
+less /tmp/mql-compiler-install.sh
+bash /tmp/mql-compiler-install.sh
 ```
 
-It lands in `~/.local/bin`; if that is not on `PATH`, the installer prints the line to add. For system-wide installs, upgrades, uninstalling, custom installers and troubleshooting, see [references/installation.md](references/installation.md).
+It lands in `~/.local/bin`; if that is not on `PATH`, the installer prints the line to add and edits no shell file. For system-wide installs, upgrades, uninstalling, custom installers and troubleshooting, see [references/installation.md](references/installation.md).
 
 ## Compile
 
 ```bash
-mql-compiler [OPTIONS] [FILE or FOLDER ...]
+mql-compiler [OPTIONS] [FILE or DIRECTORY ...]
 
-mql-compiler 2>/dev/null                               # every .mq4 and .mq5 under the current folder
-mql-compiler /abs/path/MQL5/Experts/Foo.mq5 2>/dev/null # one file, from any folder
-mql-compiler MQL5/Indicators MQL4 2>/dev/null           # folders, searched recursively
-mql-compiler -I /path/to/shared/lib MQL5 2>/dev/null    # a shared include folder outside the tree
+mql-compiler 2>/dev/null                               # every .mq4 and .mq5 under the current directory
+mql-compiler /abs/path/MQL5/Experts/Foo.mq5 2>/dev/null # one file, from any directory
+mql-compiler MQL5/Indicators MQL4 2>/dev/null           # directories, searched recursively
+mql-compiler -I /path/to/shared/lib MQL5 2>/dev/null    # a shared include directory outside the tree
 mql-compiler --werror MQL5 2>/dev/null                  # warnings count as failures
 ```
 
-Options: `-I DIR` / `--include DIR` (extra include folder, repeatable), `--mt4-terminal DIR` / `--mt5-terminal DIR` (compile with that portable terminal's MetaEditor and standard library, mounted read-only; the terminal must have been started once so its standard library is unpacked), `--werror`, `--watch` (recompile on change until stopped; do not use it in an agent run, it never exits on its own), `--text` and `--format json|text|gnu` (output format; leave the JSON default), `--setup` (install only), `--update` (reinstall MT4/MT5 with the newest builds), `--version` (image version and MetaEditor builds), `-h`/`--help`.
+Options: `-I DIR` / `--include DIR` (extra include directory, repeatable), `--mt4-terminal DIR` / `--mt5-terminal DIR` (compile with that portable terminal's MetaEditor and standard library, mounted read-only; the terminal must have been started once so its standard library is unpacked), `--werror`, `--watch` (recompile on change until stopped; do not use it in an agent run, it never exits on its own), `--text` and `--format json|text|gnu` (output format; leave the JSON default), `--setup` (install only), `--update` (reinstall MT4/MT5 with the newest builds), `--version` (image version and MetaEditor builds), `-h`/`--help`.
 
-- Arguments are files or folders, relative or absolute, anywhere on the machine. No argument means the current folder. No `cd` is needed. A path that does not exist stops the run with exit `2` before anything compiles.
-- A folder is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order given; a file named twice compiles once, in its first position. `.mqh` and other files are skipped in folders and rejected (exit `2`) when named directly. A run that finds no sources exits `2`.
+- Arguments are files or directories, relative or absolute, anywhere on the machine. No argument means the current directory. No `cd` is needed. A path that does not exist stops the run with exit `2` before anything compiles.
+- A directory is searched recursively for `.mq4` and `.mq5` (any case), sorted by path; symlinked files inside it are skipped. Arguments are handled in the order given; a file named twice compiles once, in its first position. `.mqh` and other files are skipped in directories and rejected (exit `2`) when named directly. A run that finds no sources exits `2`.
 - One container runs the whole list, one file at a time, never in parallel. A failing file does not stop the run. Pass everything to one call: two runs at the same time take turns (the second logs that it is waiting), so splitting a job only makes it slower.
 - Paths with spaces work; the messages still show the real paths.
-- The extension alone picks the compiler: `.mq4` goes to MT4's MetaEditor, `.mq5` to MT5's. The folder only decides the includes: a `.mq4` uses the nearest folder named `MQL4` (any case) above it, a `.mq5` the nearest `MQL5`. Experts, indicators, scripts and libraries all compile the same way.
+- The extension alone picks the compiler: `.mq4` goes to MT4's MetaEditor, `.mq5` to MT5's. The directory only decides the includes: a `.mq4` uses the nearest directory named `MQL4` (any case) above it, a `.mq5` the nearest `MQL5`. Experts, indicators, scripts and libraries all compile the same way.
 - Each `.ex4`/`.ex5` is written next to its source with the same base name, owned by the caller. The old one is deleted right before the file compiles, so after a run an `.ex4`/`.ex5` exists only if this run produced it. Still report success from the file's `"status": "ok"`.
-- The container sees only the mounted folders (each source's `MQL4`/`MQL5` folder, or a loose file's own folder). Includes, resources and symlinks that point outside them are missing files inside the container.
+- The container sees only the mounted directories (each source's `MQL4`/`MQL5` directory, or a loose file's own directory). Includes, resources and symlinks that point outside them are missing files inside the container.
 - The first run downloads and installs MT4 and MT5 into the `mql-compiler-cache` Docker volume and unpacks their standard libraries, about a minute and a half. A compile installs only the platforms its sources need, and never one given with `--mt4-terminal`/`--mt5-terminal`. Allow for it in timeouts; later runs take seconds. `mql-compiler --setup` does only this.
 
 ## How includes resolve
 
-- `#include <...>` searches one merged folder built for the run: the matching platform's MetaQuotes standard library (`<Trade/Trade.mqh>`, `<Arrays/ArrayObj.mqh>`, `<stdlib.mqh>`, ...), then each `-I` folder, then the `Include` folder of the nearest enclosing `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) folder, each laid over the one before. When two have the same path, the later one wins, so the user's own `Include` always wins.
-- An `-I` folder stands in for `Include`: with `-I /libs` and `/libs/MyLib/x.mqh`, `#include <MyLib/x.mqh>` works.
-- `#resource "\\Files\\x.txt"` and other `\\`-rooted paths start at that same `MQL4`/`MQL5` folder.
+- `#include <...>` searches one merged directory built for the run: the matching platform's MetaQuotes standard library (`<Trade/Trade.mqh>`, `<Arrays/ArrayObj.mqh>`, `<stdlib.mqh>`, ...), then each `-I` directory, then the `Include` directory of the nearest enclosing `MQL4` (for `.mq4`) or `MQL5` (for `.mq5`) directory, each laid over the one before. When two have the same path, the later one wins, so the user's own `Include` always wins.
+- An `-I` directory stands in for `Include`: with `-I /libs` and `/libs/MyLib/x.mqh`, `#include <MyLib/x.mqh>` works.
+- `#resource "\\Files\\x.txt"` and other `\\`-rooted paths start at that same `MQL4`/`MQL5` directory.
 - `#include "..."` resolves next to the source.
-- A source outside any `MQL4`/`MQL5` folder gets the standard library only, and no `\\`-rooted resources.
+- A source outside any `MQL4`/`MQL5` directory gets the standard library only, and no `\\`-rooted resources.
 - An error inside a standard header is reported at the header's path in the toolchain (`/cache/uid-<UID>/wine/drive_c/...`, inside the cache volume, not on the host). It usually means the user's code broke something the header relies on, such as a macro with the same name as a standard class; fix the user's code, never the toolchain.
-- Nothing is written into the user's folders or the toolchain; the merged folder is temporary.
+- Nothing is written into the user's directories or the toolchain; the merged directory is temporary.
 
-So keep a terminal-style tree: sources under `MQL5/Experts`, `MQL5/Indicators`, ..., headers under `MQL5/Include` (same for `MQL4`). When copying a source elsewhere to compile it, copy its `MQL4`/`MQL5` folder with it, or its custom includes go missing.
+So keep a terminal-style tree: sources under `MQL5/Experts`, `MQL5/Indicators`, ..., headers under `MQL5/Include` (same for `MQL4`). When copying a source elsewhere to compile it, copy its `MQL4`/`MQL5` directory with it, or its custom includes go missing.
 
 ## Read the result
 
@@ -71,7 +87,7 @@ stdout is JSON Lines, one object per line with a `type`. Parse it; do not scrape
 - `error` (instead of the rest, when the run cannot start): `message`. A bad path, a bad option or a failed setup.
 - `version` (from `--version`, `--setup`, `--update`): `version`, `mt4_metaeditor`, `mt5_metaeditor`.
 
-Paths are relative to the current folder when inside it, absolute otherwise. Fix the source at each message's `file`, `line` and `column`, and compile again. Progress and diagnostics go to stderr as JSON log lines; `2>/dev/null` hides them. A copy of the last run (stdout and stderr) is in the cache volume: `docker run --rm -v mql-compiler-cache:/c busybox cat /c/uid-$(id -u)/logs/last-run.log`.
+Paths are relative to the current directory when inside it, absolute otherwise. Fix the source at each message's `file`, `line` and `column`, and compile again. Progress and diagnostics go to stderr as JSON log lines; `2>/dev/null` hides them. A copy of the last run (stdout and stderr) is in the cache volume: `docker run --rm -v mql-compiler-cache:/c:ro busybox:1.37.0 cat /c/uid-$(id -u)/logs/last-run.log`.
 
 | Exit | Meaning |
 |---|---|
@@ -85,5 +101,5 @@ Paths are relative to the current folder when inside it, absolute otherwise. Fix
 - Use the `mql-compiler` command. Do not build your own `docker run` unless the user asks.
 - Report compile errors with their file, line, column, code and text from the `messages`. A file compiled when its record says `"status": "ok"`, even if the run exits `1` because of another file. Claim the whole build succeeded only when the exit status is `0` and the summary shows `"failed": 0`.
 - Mention warnings to the user even when the build passes; they are in `messages` with `"severity": "warning"`.
-- `file '...' not found` on an `#include <...>` means the header is in neither the user's `Include` nor the standard library. Check the source sits under the right `MQL4`/`MQL5` folder before editing code.
-- `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` choose other installers, which only matters on a first run, so pair them with a fresh `MQL_COMPILER_VOLUME`. `MQL_COMPILER_INSTALL_TIMEOUT` (seconds, default 600) caps each platform's install on a first run. `MQL_COMPILER_SECCOMP` replaces the seccomp profile the installer put next to the command; leave it alone unless the user asks. Remove a volume only when the user asks: it costs another full download, and `mql-compiler-cache` holds every user's toolchain on the machine.
+- `file '...' not found` on an `#include <...>` means the header is in neither the user's `Include` nor the standard library. Check the source sits under the right `MQL4`/`MQL5` directory before editing code.
+- `MQL_COMPILER_MT4_URL` and `MQL_COMPILER_MT5_URL` choose other installers, which only matters on a first run, so pair them with a fresh `MQL_COMPILER_VOLUME`. `MQL_COMPILER_INSTALL_TIMEOUT` (seconds, default 600) caps each platform's install on a first run. `MQL_COMPILER_SECCOMP` replaces the seccomp profile the installer put next to the command; leave it alone unless the user asks. Remove a volume only when the user asks (see Security & safety).

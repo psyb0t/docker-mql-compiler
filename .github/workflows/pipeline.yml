@@ -101,11 +101,11 @@ jobs:
       contents: write
     uses: psyb0t/reusable-github-workflows/.github/workflows/create-badges.yml@master
 
-  # The called workflow builds only on master or tags, so other branches stop
+  # Only a push to the default branch builds the image; other branches stop
   # after the checks.
-  call-docker-image-workflow:
+  docker:
     needs: [code, action]
-    if: "!startsWith(github.ref, 'refs/tags/')"
+    if: "!startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch"
     permissions:
       contents: write # the called workflow's release job asks for it
       security-events: write # upload the Grype SARIF to the Security tab
@@ -121,6 +121,8 @@ jobs:
       # Report scan findings to the Security tab without failing the run, so a
       # tag release can still promote this build.
       scan_fail_build: false
+      dockerhub_private: false
+      sync_description: true
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -146,9 +148,10 @@ jobs:
       promote_on_tag: true
       # The release job below cuts the release from the tag's own notes.
       create_release: false
-      scan_severity: "high"
       cache_mode: "min"
-      scan_fail_build: false
+      # The master run already scanned this digest and set the description.
+      scan_enabled: false
+      sync_description: false
     secrets:
       dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -171,5 +174,9 @@ jobs:
     with:
       skill_names: '["mql-compiler"]'
       plugin_names: "[]"
+      # The skill names psyb0t/mql-compiler and links install.sh on master;
+      # the published copy gets the release image and the release tag instead.
+      pin_images: '["psyb0t/mql-compiler"]'
+      pin_source_urls: true
     secrets:
       clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
