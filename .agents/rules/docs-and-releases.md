@@ -13,8 +13,8 @@ Prefix: DOC.
   - the GitHub Action's inputs and outputs and manual Docker runs: `docs/ci-and-docker.md`;
   - error messages, their causes and fixes: `docs/troubleshooting.md`;
   - the GitHub Action's own metadata: the `description` fields in `action.yml`;
-  - the same facts for agents: `.agents/skills/mql-compiler/SKILL.md`;
-  - installing, upgrading, the first run and troubleshooting: `.agents/skills/mql-compiler/references/installation.md`;
+  - the same facts for agents, limited to using the installed command, with setup linked to the docs and no installer steps: `.agents/skills/mql-compiler/SKILL.md`;
+  - what an agent tells the user when the command fails: `.agents/skills/mql-compiler/references/troubleshooting.md`;
   - the in-image summary: `usage()` in `entrypoint.sh` (`--help`) and the header comments of `entrypoint.sh` and `wrapper.sh`;
   - internals and landmines: `AGENTS.md` and `.agents/rules/`;
   - Make targets, the test suite and CI: the `##` comments in the `Makefile` (`make help`) and `docs/development.md`.
@@ -23,7 +23,7 @@ Prefix: DOC.
 ## Prose style
 
 - **DOC6:** Each Markdown paragraph is one source line.
-- **DOC7:** The README and the pages in `docs/` use a crude, joking voice; keep it when editing them. SKILL.md, its `references/installation.md`, AGENTS.md, the rules, the CHANGELOG and comments use a plain one.
+- **DOC7:** The README and the pages in `docs/` use a crude, joking voice; keep it when editing them. SKILL.md, its `references/troubleshooting.md`, AGENTS.md, the rules, the CHANGELOG and comments use a plain one.
 
 ## CHANGELOG and versions
 

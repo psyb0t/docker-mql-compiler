@@ -43,7 +43,7 @@ Data flow: `mql-compiler` (host) -> `docker run` -> `entrypoint.sh` -> Wine -> M
 | `tests/fixtures/` | An `MQL4` and an `MQL5` tree (experts, indicators, scripts, their own `Include` with a header that shadows a standard one, a `#resource` file, standard-library users, a broken file) and a loose file outside both. Other cases (symlinks, lowercase directories, an MT4 image resource, setup failures, a foreign-UID cache, the Action script, `install.sh`) build their files at run time |
 | `tests/unit/` | Scripts that run inside the image and test entrypoint functions with one dependency stubbed |
 | `docs/` | The documentation site (GitHub Pages) |
-| `.agents/skills/mql-compiler/` | The agent skill published to ClawHub, and its `references/installation.md` |
+| `.agents/skills/mql-compiler/` | The agent skill published to ClawHub, and its `references/troubleshooting.md` |
 | `.agents/.claude-plugin/`, `.agents/.codex-plugin/` | Claude Code and Codex plugin manifests |
 | `.agents/rules/` | Rules for changing this repository |
 | `.github/workflows/` | `pipeline.yml` plus repository housekeeping workflows |

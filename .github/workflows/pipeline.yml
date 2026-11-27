@@ -174,9 +174,5 @@ jobs:
     with:
       skill_names: '["mql-compiler"]'
       plugin_names: "[]"
-      # The skill names psyb0t/mql-compiler and links install.sh on master;
-      # the published copy gets the release image and the release tag instead.
-      pin_images: '["psyb0t/mql-compiler"]'
-      pin_source_urls: true
     secrets:
       clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

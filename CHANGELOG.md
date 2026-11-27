@@ -2,6 +2,12 @@
 
 All notable changes per release. Versions follow [semver](https://semver.org) pre-1.0 conventions: minor bumps may include breaking changes (called out explicitly), patch bumps are docs, build and fixes only.
 
+## v0.5.8, 2026-11-27
+
+- The agent skill now covers only using an `mql-compiler` command that is already installed: compiling sources and reading the JSON results. Install and upgrade steps are out of the skill and stay in the [documentation](https://psyb0t.github.io/docker-mql-compiler/). `references/installation.md` is removed, and the new `references/troubleshooting.md` lists the error messages the command prints, what each means and what to tell the user.
+- The ClawHub publish job no longer sets `pin_images` or `pin_source_urls`, so publishing no longer rewrites the skill's image reference or links to the release.
+- The README no longer says the skill installs the command. Rule DOC1 now says the skill covers use of the installed command and links the docs for setup, and DOC1 and DOC7 name the troubleshooting reference instead of the installation one.
+
 ## v0.5.7, 2026-11-27
 
 - The agent skill now states its safety limits. The container runs as the caller's user without extra privileges or the Docker socket, and mounts only the directories named on the command line, with `--mt4-terminal` and `--mt5-terminal` directories read-only. The first compile downloads the MT4 and MT5 installers and checks their MetaQuotes signature. The skill tells agents to download `install.sh`, read it and then run it instead of piping it into a shell, to use the per-user install unless asked otherwise, and to uninstall or remove the toolchain volume only when the user asks. Its frontmatter declares the network, shell and filesystem use, and the last-run log command uses `busybox:1.37.0` with the volume mounted read-only.

@@ -76,7 +76,7 @@ Compilation errors fail the job and become annotations on the source lines. The 
 
 ## Agent integrations
 
-[The mql-compiler skill](https://github.com/psyb0t/docker-mql-compiler/blob/master/.agents/skills/mql-compiler/SKILL.md) teaches Claude Code, Codex, OpenClaw and [peen](https://github.com/psyb0t/peen) to install the command, compile and read the JSON results without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
+[The mql-compiler skill](https://github.com/psyb0t/docker-mql-compiler/blob/master/.agents/skills/mql-compiler/SKILL.md) teaches Claude Code, Codex, OpenClaw and [peen](https://github.com/psyb0t/peen) to compile with the installed command and read the JSON results without making shit up. Every release publishes it to [ClawHub](https://clawhub.ai).
 
 ## Recommended brokers and prop firms
 
